@@ -1,6 +1,7 @@
 package consensus
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/harmony-one/harmony/crypto/bls"
@@ -18,13 +19,22 @@ import (
 
 func (consensus *Consensus) announce(block *types.Block) {
 	blockHash := block.Hash()
-
+	//fmt.Println("==============[Announce] before encode==================", block.StateTransferTransactions())
 	// prepare message and broadcast to validators
+	// 将区块进行rlp编码，之后leader广播给验证者
 	encodedBlock, err := rlp.EncodeToBytes(block)
 	if err != nil {
+		fmt.Println("==============[Announce] Failed encoding block==================")
 		consensus.getLogger().Debug().Msg("[Announce] Failed encoding block")
 		return
 	}
+	// 可以正确decode
+	var deState *types.Block
+	err = rlp.DecodeBytes(encodedBlock, &deState)
+	if err!=nil{
+		fmt.Println("==============[Announce] Failed decode block==================")
+	}
+	//fmt.Println("==============[Announce] decode block==================", deState.StateTransferTransactions())
 
 	//// Lock Write - Start
 	consensus.mutex.Lock()
@@ -77,6 +87,7 @@ func (consensus *Consensus) announce(block *types.Block) {
 		}
 	}
 	// Construct broadcast p2p message
+	consensus.getLogger().Info().Msg("SendWithRetry: announce")
 	if err := consensus.msgSender.SendWithRetry(
 		consensus.blockNum, msg_pb.MessageType_ANNOUNCE, []nodeconfig.GroupID{
 			nodeconfig.NewGroupIDByShardID(nodeconfig.ShardID(consensus.ShardID)),
@@ -86,7 +97,7 @@ func (consensus *Consensus) announce(block *types.Block) {
 				nodeconfig.ShardID(consensus.ShardID),
 			))).
 			Msg("[Announce] Cannot send announce message")
-	} else {
+	} else { // leader SendWithRetry没有error的时候，打印这里
 		consensus.getLogger().Info().
 			Str("blockHash", block.Hash().Hex()).
 			Uint64("blockNum", block.NumberU64()).
@@ -298,6 +309,9 @@ func (consensus *Consensus) onCommit(recvMsg *FBFTMessage) {
 	quorumIsMet := consensus.Decider.IsQuorumAchieved(quorum.Commit)
 	//// Read - End
 
+	// dynamic sharding 下面这段代码看着很重要，包括commit的很多停止条件
+	// 包括重要的时间尺度：maxWaitTime=NextBlockDue-0.2s， waitTime=1s
+	// 只有传入的viewID等于当前block的viewID的时候，才能进入finalCommit
 	if !quorumWasMet && quorumIsMet {
 		logger.Info().Msg("[OnCommit] 2/3 Enough commits received")
 		consensus.FBFTLog.MarkBlockVerified(blockObj)

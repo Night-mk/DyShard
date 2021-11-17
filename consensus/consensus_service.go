@@ -1,6 +1,7 @@
 package consensus
 
 import (
+	"fmt"
 	"math/big"
 	"sync/atomic"
 	"time"
@@ -272,9 +273,11 @@ func (consensus *Consensus) UpdateConsensusInformation() Mode {
 	}
 
 	consensus.BlockPeriod = 5 * time.Second
+	fmt.Println("Use 5 seconds consensus time")
 
 	// Enable 2s block time at the twoSecondsEpoch
 	if consensus.Blockchain.Config().IsTwoSeconds(nextEpoch) {
+		fmt.Println("Use 2 seconds consensus time")
 		consensus.BlockPeriod = 2 * time.Second
 	}
 

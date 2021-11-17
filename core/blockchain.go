@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/harmony-one/harmony/shard/mapping/load"
 	"io"
 	"math/big"
 	"os"
@@ -141,12 +142,13 @@ type BlockChain struct {
 	currentFastBlock atomic.Value // Current head of the fast-sync chain (may be above the block chain!)
 
 	stateCache                    state.Database // State database to reuse between imports (contains state cache)
+	// lru(least Recently Used)近期最少使用算法, 缓存最近使用的对象，最近最少使用的对象将从缓存中移除
 	bodyCache                     *lru.Cache     // Cache for the most recent block bodies
 	bodyRLPCache                  *lru.Cache     // Cache for the most recent block bodies in RLP encoded format
 	receiptsCache                 *lru.Cache     // Cache for the most recent receipts per block
 	blockCache                    *lru.Cache     // Cache for the most recent entire blocks
 	futureBlocks                  *lru.Cache     // future blocks are blocks added for later processing
-	shardStateCache               *lru.Cache
+	shardStateCache               *lru.Cache    // 分片状态的cache
 	lastCommitsCache              *lru.Cache
 	epochCache                    *lru.Cache    // Cache epoch number → first block number
 	randomnessCache               *lru.Cache    // Cache for vrf/vdf
@@ -170,6 +172,9 @@ type BlockChain struct {
 	shouldPreserve         func(*types.Block) bool // Function used to determine whether should preserve the given block.
 	pendingSlashes         slash.Records
 	maxGarbCollectedBlkNum int64
+
+	/* dynamic sharding */
+	loadMapStateCache       state.Database  // LoadMap缓存
 }
 
 // NewBlockChain returns a fully initialised block chain using information
@@ -231,6 +236,7 @@ func NewBlockChain(
 		badBlocks:                     badBlocks,
 		pendingSlashes:                slash.Records{},
 		maxGarbCollectedBlkNum:        -1,
+		loadMapStateCache:             state.NewDatabase(db), // 初始化loadMap缓存
 	}
 	bc.SetValidator(NewBlockValidator(chainConfig, bc, engine))
 	bc.SetProcessor(NewStateProcessor(chainConfig, bc, engine))
@@ -256,19 +262,39 @@ func NewBlockChain(
 }
 
 // ValidateNewBlock validates new block.
+// 验证新区块，添加对loadMap相关交易的执行和验证
+// 这个方法和insertchain方法中验证区块的结构基本相同，是一个单独拆分出来的方法，没有直接被insertchain使用
 func (bc *BlockChain) ValidateNewBlock(block *types.Block) error {
+	// 验证流程：
+	// 1. 获取stateCache和当前的root创建一个state
+	// 2. 利用该state和输入的block计算receipt
+	// 3. 调用block_validator的ValidateState方法，验证哈希root是否一致
 	state, err := state.New(bc.CurrentBlock().Root(), bc.stateCache)
-
 	if err != nil {
+		fmt.Println("====ValidateNewBlock state error====")
+		return err
+	}
+
+	// 新增loadMap验证
+	loadMapState, err := load.New(bc.CurrentBlock().LoadMapRoot(), bc.loadMapStateCache)
+	if err != nil {
+		fmt.Println("====ValidateNewBlock loadMapState error====")
 		return err
 	}
 
 	// NOTE Order of mutating state here matters.
 	// Process block using the parent state as reference point.
-	receipts, cxReceipts, _, usedGas, _, err := bc.processor.Process(
-		block, state, bc.vmConfig,
+	// process执行过程中新增loadMap相关交易的执行以及结果反馈
+	//receipts, cxReceipts, _, usedGas, _, err := bc.processor.Process(
+	//	block, state, bc.vmConfig,
+	//)
+	// dynamic sharding
+	receipts, cxReceipts, _, usedGas, _, err := bc.processor.Process1(
+		block, state, bc.vmConfig, loadMapState,
 	)
+	// END
 	if err != nil {
+		fmt.Println("====ValidateNewBlock Process error====")
 		bc.reportBlock(block, receipts, err)
 		return err
 	}
@@ -277,9 +303,21 @@ func (bc *BlockChain) ValidateNewBlock(block *types.Block) error {
 	if err := bc.Validator().ValidateState(
 		block, state, receipts, cxReceipts, usedGas,
 	); err != nil {
+		fmt.Println("====ValidateNewBlock ValidateState error====")// 错在这里？！
 		bc.reportBlock(block, receipts, err)
 		return err
 	}
+
+	// dynamic sharding
+	// 新增对loadmap state的验证
+	if err := bc.Validator().ValidateLoadMapState(
+		block, loadMapState,
+	); err != nil {
+		fmt.Println("====ValidateNewBlock ValidateLoadMapState error====")
+		bc.reportBlock(block, receipts, err)
+		return err
+	}
+	// END
 	return nil
 }
 
@@ -325,6 +363,19 @@ func (bc *BlockChain) loadLastState() error {
 			return err
 		}
 	}
+
+	// dynamic sharding
+	// 保证区块中的loadmap state是可用的（在cache中能找到就行）
+	if _, err := load.New(currentBlock.LoadMapRoot(), bc.loadMapStateCache); err != nil{
+		// 如果出现loadMap state无法使用，则重置整个链（不做repair的操作了），通常也不会有错
+		utils.Logger().Warn().
+			Str("number", currentBlock.Number().String()).
+			Str("hash", currentBlock.Hash().Hex()).
+			Msg("Head loadMap state missing, reset chain")
+		return bc.Reset()
+	}
+	// END
+
 	// Everything seems to be fine, set as the head block
 	bc.currentBlock.Store(currentBlock)
 
@@ -491,14 +542,30 @@ func (bc *BlockChain) Processor() Processor {
 }
 
 // State returns a new mutable state based on the current HEAD block.
+// 基于当前 HEAD 块返回一个新的可变状态(存在stateCache中的状态)
 func (bc *BlockChain) State() (*state.DB, error) {
 	return bc.StateAt(bc.CurrentBlock().Root())
 }
 
 // StateAt returns a new mutable state based on a particular point in time.
+// 这个函数使用的地方很多，主要看需要修改哪些
 func (bc *BlockChain) StateAt(root common.Hash) (*state.DB, error) {
 	return state.New(root, bc.stateCache)
 }
+
+/**
+	dynamic sharding
+ */
+// LoadMapState 返回新的可变loadMap状态，基于当前的HEAD block
+func (bc *BlockChain) LoadMapState() (*load.LoadMapDB, error) {
+	return bc.LoadMapStateAt(bc.CurrentBlock().LoadMapRoot())
+}
+
+// LoadMapStateAt returns a new mutable state based on a particular point in time.
+func (bc *BlockChain) LoadMapStateAt(root common.Hash) (*load.LoadMapDB, error) {
+	return load.New(root, bc.loadMapStateCache)
+}
+// END
 
 // Reset purges the entire blockchain, restoring it to its genesis state.
 func (bc *BlockChain) Reset() error {
@@ -507,6 +574,7 @@ func (bc *BlockChain) Reset() error {
 
 // ResetWithGenesisBlock purges the entire blockchain, restoring it to the
 // specified genesis state.
+// 清除整个区块链
 func (bc *BlockChain) ResetWithGenesisBlock(genesis *types.Block) error {
 	// Dump the entire block chain and purge the caches
 	if err := bc.SetHead(0); err != nil {
@@ -544,6 +612,7 @@ func (bc *BlockChain) repair(head **types.Block) error {
 	valsToRemove := map[common.Address]struct{}{}
 	for {
 		// Abort if we've rewound to a head block that does have associated state
+		// 基本用不到这个函数，就不加loadMapStateCache的检查了
 		if _, err := state.New((*head).Root(), bc.stateCache); err == nil {
 			utils.Logger().Info().
 				Str("number", (*head).Number().String()).
@@ -746,6 +815,25 @@ func (bc *BlockChain) HasBlockAndState(hash common.Hash, number uint64) bool {
 	return bc.HasState(block.Root())
 }
 
+/**
+	dynamic sharding
+ */
+// HasState checks if state trie is fully present in the database or not.
+func (bc *BlockChain) HasLoadMapState(hash common.Hash) bool {
+	_, err := bc.loadMapStateCache.OpenTrie(hash)
+	return err == nil
+}
+// 检查给定区块和相应的loadMap状态trie是否在数据库
+func (bc *BlockChain) HasBlockAndLoadMapState(hash common.Hash, number uint64) bool {
+	// Check first that the block itself is known
+	block := bc.GetBlock(hash, number)
+	if block == nil {
+		return false
+	}
+	return bc.HasLoadMapState(block.LoadMapRoot())
+}
+// END
+
 // GetBlock retrieves a block from the database by hash and number,
 // caching it if found.
 func (bc *BlockChain) GetBlock(hash common.Hash, number uint64) *types.Block {
@@ -835,6 +923,7 @@ func (bc *BlockChain) TrieNode(hash common.Hash) ([]byte, error) {
 
 // Stop stops the blockchain service. If any imports are currently in progress
 // it will abort them using the procInterrupt.
+// 停止区块链服务，确保在退出前，recent block的Cache里的数据都应该写到磁盘
 func (bc *BlockChain) Stop() {
 	if !atomic.CompareAndSwapInt32(&bc.running, 0, 1) {
 		return
@@ -858,6 +947,8 @@ func (bc *BlockChain) Stop() {
 	//  - HEAD-127: So we have a hard limit on the number of blocks reexecuted
 	if !bc.cacheConfig.Disabled {
 		triedb := bc.stateCache.TrieDB()
+		// dynamic sharding
+		stateTransferTriedb := bc.loadMapStateCache.TrieDB()
 
 		for _, offset := range []uint64{0, 1, triesInMemory - 1} {
 			if number := bc.CurrentBlock().NumberU64(); number > offset {
@@ -871,6 +962,11 @@ func (bc *BlockChain) Stop() {
 					if err := triedb.Commit(recent.Root(), true); err != nil {
 						utils.Logger().Error().Err(err).Msg("Failed to commit recent state trie")
 					}
+					// 将loadMapStateCache写入到磁盘
+					if err := stateTransferTriedb.Commit(recent.LoadMapRoot(), true); err != nil {
+						utils.Logger().Error().Err(err).Msg("Failed to commit recent loadMapState trie")
+					}
+					// END
 				}
 			}
 		}
@@ -1142,11 +1238,12 @@ func (bc *BlockChain) WriteBlockWithoutState(block *types.Block, td *big.Int) (e
 }
 
 // WriteBlockWithState writes the block and all associated state to the database.
+// 函数将block和所有相关state写入到数据库, 只在/core/blockchain.go中被调用
 func (bc *BlockChain) WriteBlockWithState(
 	block *types.Block, receipts []*types.Receipt,
 	cxReceipts []*types.CXReceipt,
 	paid reward.Reader,
-	state *state.DB,
+	state *state.DB, loadMapState *load.LoadMapDB,
 ) (status WriteStatus, err error) {
 	bc.wg.Add(1)
 	defer bc.wg.Done()
@@ -1160,6 +1257,19 @@ func (bc *BlockChain) WriteBlockWithState(
 		return NonStatTy, errors.New("Hash of parent block doesn't match the current block hash")
 	}
 
+	// dynamic sharding
+	// 提交loadmap object的变化到in-memory trie
+	loadMapRoot, err := loadMapState.Commit(bc.chainConfig.IsS3(block.Epoch()))
+	if err != nil {
+		return NonStatTy, err
+	}
+	// 写loadMap cache, 在cache中写入当前最新的loadMap
+	loadMapTriedb := bc.loadMapStateCache.TrieDB()
+	if err := loadMapTriedb.Commit(loadMapRoot, false); err != nil{
+		return NonStatTy, err
+	}
+	// END
+
 	// Commit state object changes to in-memory trie
 	root, err := state.Commit(bc.chainConfig.IsS3(block.Epoch()))
 	if err != nil {
@@ -1168,6 +1278,8 @@ func (bc *BlockChain) WriteBlockWithState(
 
 	// Flush trie state into disk if it's archival node or the block is epoch block
 	triedb := bc.stateCache.TrieDB()
+	// 如果是存档节点或者是该epoch的最后一个区块，将trie的状态刷新到disk中
+	// 所以cache要怎么处理？
 	if bc.cacheConfig.Disabled || block.IsLastBlockInEpoch() {
 		if err := triedb.Commit(root, false); err != nil {
 			if isUnrecoverableErr(err) {
@@ -1178,6 +1290,7 @@ func (bc *BlockChain) WriteBlockWithState(
 		}
 	} else {
 		// Full but not archive node, do proper garbage collection
+		// 不是存档节点，则做适当的垃圾回收
 		triedb.Reference(root, common.Hash{}) // metadata reference to keep trie alive
 		bc.triegc.Push(root, -int64(block.NumberU64()))
 
@@ -1234,6 +1347,7 @@ func (bc *BlockChain) WriteBlockWithState(
 	}
 
 	// Write offchain data
+	// 通过 Chainlink 预言机向 Harmony 的用户提供链下数据资源(不用管)
 	if status, err := bc.CommitOffChainData(
 		batch, block, receipts,
 		cxReceipts, paid, state,
@@ -1252,6 +1366,11 @@ func (bc *BlockChain) WriteBlockWithState(
 		return NonStatTy, err
 	}
 	if err := rawdb.WritePreimages(batch, block.NumberU64(), state.Preimages()); err != nil {
+		return NonStatTy, err
+	}
+	/* dynamic sharding */
+	// 写stateTransfer交易的查找入口
+	if err := rawdb.WriteBlockSTtxLookUpEntries(batch, block); err != nil {
 		return NonStatTy, err
 	}
 
@@ -1292,12 +1411,15 @@ func (bc *BlockChain) InsertChain(chain types.Blocks, verifyHeaders bool) (int, 
 // insertChain will execute the actual chain insertion and event aggregation. The
 // only reason this method exists as a separate one is to make locking cleaner
 // with deferred statements.
+// 执行区块插入流程
 func (bc *BlockChain) insertChain(chain types.Blocks, verifyHeaders bool) (int, []interface{}, []*types.Log, error) {
+	//fmt.Println("[InsertChain START]")
 	// Sanity check that we have something meaningful to import
 	if len(chain) == 0 {
 		return 0, nil, nil, nil
 	}
 	// Do a sanity check that the provided chain is actually ordered and linked
+	// part1: per-checks 逐个检查区块的区块号是否连续以及hash链是否连续
 	for i := 1; i < len(chain); i++ {
 		if chain[i].NumberU64() != chain[i-1].NumberU64()+1 || chain[i].ParentHash() != chain[i-1].Hash() {
 			// Chain broke ancestry, log a message (programming error) and skip insertion
@@ -1314,12 +1436,14 @@ func (bc *BlockChain) insertChain(chain types.Blocks, verifyHeaders bool) (int, 
 		}
 	}
 	// Pre-checks passed, start the full block imports
+	// 如果在插入区块的时候，突然有人执行Stop()函数，那么必须要等insertChain()执行完
 	bc.wg.Add(1)
 	defer bc.wg.Done()
 
 	bc.chainmu.Lock()
 	defer bc.chainmu.Unlock()
 
+	// part2: 验证第n个区块的header和body
 	// A queued approach to delivering events. This is generally
 	// faster than direct delivery and requires much less mutex
 	// acquiring.
@@ -1333,15 +1457,18 @@ func (bc *BlockChain) insertChain(chain types.Blocks, verifyHeaders bool) (int, 
 	var verifyHeadersResults <-chan error
 
 	// If the block header chain has not been verified, conduct header verification here.
+	// 1. 验证header (应该是可以通过的)
 	if verifyHeaders {
 		headers := make([]*block.Header, len(chain))
 		seals := make([]bool, len(chain))
 
-		for i, block := range chain {
+		for i, block := range chain { // 可能有多个区块插入（同步区块的时候）
 			headers[i] = block.Header()
 			seals[i] = true
 		}
 		// Note that VerifyHeaders verifies headers in the chain in parallel
+		// 异步操作，结果返回到results通道里
+		// 只要header的parentHash能找到相应父区块，并且该父区块满足PoS难度要求即可
 		abort, results := bc.Engine().VerifyHeaders(bc, headers, seals)
 		verifyHeadersResults = results
 		defer close(abort)
@@ -1351,6 +1478,7 @@ func (bc *BlockChain) insertChain(chain types.Blocks, verifyHeaders bool) (int, 
 	//senderCacher.recoverFromBlocks(types.MakeSigner(bc.chainConfig, chain[0].Number()), chain)
 
 	// Iterate over the blocks and insert when the verifier permits
+	// 2. 检查区块的正确性
 	for i, block := range chain {
 		// If the chain is terminating, stop processing blocks
 		if atomic.LoadInt32(&bc.procInterrupt) == 1 {
@@ -1362,23 +1490,29 @@ func (bc *BlockChain) insertChain(chain types.Blocks, verifyHeaders bool) (int, 
 
 		var err error
 		if verifyHeaders {
+			// 异步返回验证Header的结果
 			err = <-verifyHeadersResults
 		}
 		if err == nil {
 			err = bc.Validator().ValidateBody(block)
 		}
+		// 3. 处理验证header和body所产生的错误
 		switch {
 		case err == ErrKnownBlock:
+			fmt.Println("[InsertChain: verifyHeaderAndBody -> ErrKnownBlock]")
 			// Block and state both already known. However if the current block is below
 			// this number we did a rollback and we should reimport it nonetheless.
+			// 待插入的区块已经存在于数据库，并且规范链头区块区块号大于该区块的区块号，直接忽略
 			if bc.CurrentBlock().NumberU64() >= block.NumberU64() {
 				stats.ignored++
 				continue
 			}
 
 		case err == consensus_engine.ErrFutureBlock:
+			fmt.Println("[InsertChain: verifyHeaderAndBody -> ErrFutureBlock]")
 			// Allow up to MaxFuture second in the future blocks. If this limit is exceeded
 			// the chain is discarded and processed at a later time if given.
+			// 待插入区块的时间戳大于当前时间30秒，则直接丢弃这个区块
 			max := big.NewInt(time.Now().Unix() + maxTimeFutureBlocks)
 			if block.Time().Cmp(max) > 0 {
 				return i, events, coalescedLogs, fmt.Errorf("future block: %v > %v", block.Time(), max)
@@ -1388,12 +1522,17 @@ func (bc *BlockChain) insertChain(chain types.Blocks, verifyHeaders bool) (int, 
 			continue
 
 		case err == consensus_engine.ErrUnknownAncestor && bc.futureBlocks.Contains(block.ParentHash()):
+			fmt.Println("[InsertChain: verifyHeaderAndBody -> ErrUnknownAncestor]")
+			// 数据库里找不到这个区块的父区块，但未来待处理缓冲里有父区块，就将它放入未来待处理缓冲里
 			bc.futureBlocks.Add(block.Hash(), block)
 			stats.queued++
 			continue
 
 		case err == consensus_engine.ErrPrunedAncestor:
+			fmt.Println("[InsertChain: verifyHeaderAndBody -> ErrPrunedAncestor]")
 			// TODO: add fork choice mechanism
+			// 父区块是数据库中的一条精简分支区块（精简分支区块就是一些没有state root的区块）
+			// 如果这个区块的总难度小于等于规范链的总难度值，只将它写入数据库，不上规范链
 			// Block competing with the canonical chain, store in the db, but don't process
 			// until the competitor TD goes above the canonical TD
 			//currentBlock := bc.CurrentBlock()
@@ -1419,6 +1558,7 @@ func (bc *BlockChain) insertChain(chain types.Blocks, verifyHeaders bool) (int, 
 			// Prune in case non-empty winner chain
 			if len(winner) > 0 {
 				// Import all the pruned blocks to make the state available
+				// 递归调用insertChain(),不再需要错误处理，而是按顺序执行交易完善精简区块的state
 				bc.chainmu.Unlock()
 				_, evs, logs, err := bc.insertChain(winner, true /* verifyHeaders */)
 				bc.chainmu.Lock()
@@ -1430,46 +1570,81 @@ func (bc *BlockChain) insertChain(chain types.Blocks, verifyHeaders bool) (int, 
 			}
 
 		case err != nil:
+			fmt.Println("[InsertChain: verifyHeaderAndBody -> err!=nil]")
 			bc.reportBlock(block, nil, err)
 			return i, events, coalescedLogs, err
 		}
 
 		// Create a new statedb using the parent block and report an
 		// error if it fails.
+		// 4. 如果上面验证均通过，则对待插入区块的交易状态进行验证，否则退出
 		var parent *types.Block
-		if i == 0 {
+		if i == 0 { // 对于新来的chain中第一个区块，需要获取父区块
 			parent = bc.GetBlock(block.ParentHash(), block.NumberU64()-1)
 		} else {
 			parent = chain[i-1]
 		}
+
+		// (1) 从父区块读取状态, state表示父区块的trie创建的状态数据
 		state, err := state.New(parent.Root(), bc.stateCache)
 		if err != nil {
+			fmt.Println("[InsertChain: Read state error]")
 			return i, events, coalescedLogs, err
 		}
+		/* dynamic sharding */
+		// 读取父区块的loadMap状态
+		loadMapState, err := load.New(parent.LoadMapRoot(), bc.loadMapStateCache)
 
 		// Process block using the parent state as reference point.
-		receipts, cxReceipts, logs, usedGas, payout, err := bc.processor.Process(
-			block, state, bc.vmConfig,
+		// (2) 执行交易，更新状态
+		/*
+			dynamic sharding
+		 */
+		// 采用Process1函数处理loadMapState
+		//receipts, cxReceipts, logs, usedGas, payout, err := bc.processor.Process(
+		//	block, state, bc.vmConfig,
+		//)
+		receipts, cxReceipts, logs, usedGas, payout, err := bc.processor.Process1(
+			block, state, bc.vmConfig, loadMapState,
 		)
 		if err != nil {
+			fmt.Println("[InsertChain: Process1 error]")
 			bc.reportBlock(block, receipts, err)
 			return i, events, coalescedLogs, err
 		}
 
 		// Validate the state using the default validator
+		// (3) 对状态进行验证，检查与当前传入的block的header中的数据是否匹配
+		// 验证状态：用上面执行交易后得到的全新状态对比block中的状态参数
 		if err := bc.Validator().ValidateState(
 			block, state, receipts, cxReceipts, usedGas,
 		); err != nil {
+			fmt.Println("[InsertChain: ValidateState error]")
+			bc.reportBlock(block, receipts, err)
+			return i, events, coalescedLogs, err
+		}
+		/*
+			dynamic sharding
+		 */
+		// 新增对loadmap state的验证
+		if err := bc.Validator().ValidateLoadMapState(
+			block, loadMapState,
+		); err != nil {
+			fmt.Println("[InsertChain: ValidateState error]")
 			bc.reportBlock(block, receipts, err)
 			return i, events, coalescedLogs, err
 		}
 		proctime := time.Since(bstart)
 
 		// Write the block to the chain and get the status.
+		// 5. 如果验证成功，调用WriteBlockWithState将这个区块插入数据库，然后写入规范链，同时处理分叉问题
+		// (1) 写入数据库，判断是规范链还是分叉
+		// 修改WriteBlockWithState，新增loadMapState参数
 		status, err := bc.WriteBlockWithState(
-			block, receipts, cxReceipts, payout, state,
+			block, receipts, cxReceipts, payout, state, loadMapState,
 		)
 		if err != nil {
+			fmt.Println("[InsertChain: WriteBlockWithState error]")
 			return i, events, coalescedLogs, err
 		}
 		logger := utils.Logger().With().
@@ -1482,8 +1657,8 @@ func (bc *BlockChain) insertChain(chain types.Blocks, verifyHeaders bool) (int, 
 			Str("elapsed", common.PrettyDuration(time.Since(bstart)).String()).
 			Logger()
 
-		switch status {
-		case CanonStatTy:
+		switch status { // harmony和go-ethereum的区别在于没有分叉问题
+		case CanonStatTy: // (2) 如果是规范链，输出规范链日志，添加ChainEvent事件
 			logger.Info().Msg("Inserted new block")
 			coalescedLogs = append(coalescedLogs, logs...)
 			blockInsertTimer.UpdateSince(bstart)
@@ -1500,10 +1675,15 @@ func (bc *BlockChain) insertChain(chain types.Blocks, verifyHeaders bool) (int, 
 		stats.report(chain, i, cache)
 	}
 	// Append a single chain head event if we've progressed the chain
+	// part3: 跳出检查区块的循环，检验插入的区块是否是头区块，并报告事件
 	if lastCanon != nil && bc.CurrentBlock().Hash() == lastCanon.Hash() {
+		utils.Logger().Info().Msg("[InsertChain: Append ChainHeadEvent]")
+		//fmt.Println("[InsertChain: Append ChainHeadEvent]")
 		events = append(events, ChainHeadEvent{lastCanon})
 	}
 
+	//fmt.Println("[InsertChain: without error]")
+	utils.Logger().Info().Msg("[InsertChain: without error]")
 	return 0, events, coalescedLogs, nil
 }
 
@@ -1534,15 +1714,23 @@ func (st *insertStats) report(chain []*types.Block, index int, cache common.Stor
 			txs = countTransactions(chain[st.lastIndex : index+1])
 		)
 
+		// dynamic sharding修改输出
+		// 计算sttx数量
+		sttxs := len(chain[index].StateTransferTransactions())
 		context := utils.Logger().With().
 			Int("blocks", st.processed).
 			Int("txs", txs).
+			// 新增sttx数量
+			Int("sttxs", sttxs).
+			// 新增输出区块size
+			Str("blocksize", end.Size().String()).
 			Float64("mgas", float64(st.usedGas)/1000000).
 			Str("elapsed", common.PrettyDuration(elapsed).String()).
 			Float64("mgasps", float64(st.usedGas)*1000/float64(elapsed)).
 			Str("number", end.Number().String()).
 			Str("hash", end.Hash().Hex()).
 			Str("cache", cache.String())
+		// END
 
 		if timestamp := time.Unix(end.Time().Int64(), 0); time.Since(timestamp) > time.Minute {
 			context = context.Str("age", common.PrettyAge(timestamp).String())

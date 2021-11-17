@@ -20,7 +20,7 @@ type genesisInitializer struct {
 func (gi *genesisInitializer) InitChainDB(db ethdb.Database, shardID uint32) error {
 	shardState, _ := committee.WithStakingEnabled.Compute(
 		big.NewInt(core.GenesisEpoch), nil,
-	)
+	) //
 	if shardState == nil {
 		return errors.New("failed to create genesis shard state")
 	}
@@ -30,7 +30,11 @@ func (gi *genesisInitializer) InitChainDB(db ethdb.Database, shardID uint32) err
 		if err != nil {
 			return errors.New("cannot find local shard in genesis")
 		}
-		shardState = &shard.State{nil, []shard.Committee{*subComm}}
+		//shardState = &shard.State{nil, []shard.Committee{*subComm}}
+		/* dynamic sharding */
+		// 增加state返回数据的参数rangeMap
+		shardState = &shard.State{nil, []shard.Committee{*subComm},
+			shardState.RangeMap}
 	}
 	gi.node.SetupGenesisBlock(db, shardID, shardState)
 	return nil

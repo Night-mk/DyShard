@@ -14,13 +14,17 @@ OS=$(uname -s)
 . "${ROOT}/scripts/setup_bls_build_flags.sh"
 
 function cleanup() {
+  echo "======deploy.sh cleanup======"
   "${progdir}/kill_node.sh"
 }
 
 function build() {
+  echo "======deploy.sh build======"
   if [[ "${NOBUILD}" != "true" ]]; then
     pushd ${ROOT}
     export GO111MODULE=on
+    ## add proxy
+    export GOPROXY=https://goproxy.cn
     if [[ "$OS" == "Darwin" ]]; then
       # MacOS doesn't support static build
       scripts/go_executable_build.sh -S
@@ -33,7 +37,9 @@ function build() {
 }
 
 function setup() {
+  echo "======deploy.sh setup======"
   # Setup blspass file
+#  echo "test output: ${ROOT}"
   mkdir -p ${ROOT}/.hmy
   if [[ ! -f "${ROOT}/.hmy/blspass.txt" ]]; then
     touch "${ROOT}/.hmy/blspass.txt"
@@ -54,13 +60,16 @@ function setup() {
 
 function launch_bootnode() {
   echo "launching boot node ..."
-  ${DRYRUN} ${ROOT}/bin/bootnode -port 19876 >"${log_folder}"/bootnode.log 2>&1 | tee -a "${LOG_FILE}" &
+  # 启动bootnode并将输出重定向到log文件
+  # 2>&1 表示2的输出重定向等同于1
+  ${DRYRUN} ${ROOT}/bin/bootnode -port 19876 -ip 10.20.3.46 >"${log_folder}"/bootnode.log 2>&1 | tee -a "${LOG_FILE}" &
   sleep 1
   BN_MA=$(grep "BN_MA" "${log_folder}"/bootnode.log | awk -F\= ' { print $2 } ')
   echo "bootnode launched." + " $BN_MA"
 }
 
 function launch_localnet() {
+  echo "======deploy.sh launch_localnet======"
   launch_bootnode
 
   unset -v base_args
@@ -69,20 +78,26 @@ function launch_localnet() {
   if ${VERBOSE}; then
     verbosity=5
   else
-    verbosity=3
+    verbosity=3 # VERBOSE=false
   fi
 
   base_args=(--log_folder "${log_folder}" --min_peers "${MIN}" --bootnodes "${BN_MA}" "--network_type=$NETWORK" --blspass file:"${ROOT}/.hmy/blspass.txt" "--dns=false" "--verbosity=${verbosity}")
   sleep 2
 
-  # Start nodes
+  # Start nodes 启动节点
   i=-1
   while IFS='' read -r line || [[ -n "$line" ]]; do
     i=$((i + 1))
 
     # Read config for i-th node form config file
-    IFS=' ' read -r ip port mode bls_key shard <<<"${line}"
-    args=("${base_args[@]}" --ip "${ip}" --port "${port}" --key "/tmp/${ip}-${port}.key" --db_dir "${ROOT}/db-${ip}-${port}" "--broadcast_invalid_tx=false")
+    # 新增2PC的启动配置
+    IFS=' ' read -r ip port rpcip rpcport mode bls_key shard role nodeaddr committype timeout <<<"${line}"
+    args=(
+      "${base_args[@]}" --ip "${ip}" --port "${port}" --http.ip "${rpcip}" --http.port ${rpcport}
+      --key "/tmp/${ip}-${port}.key" --db_dir "${ROOT}/db-${ip}-${port}" "--broadcast_invalid_tx=false"
+      --role "${role}" --nodeaddr "${nodeaddr}" --committype "${committype}" --timeout ${timeout}
+      --p2p.ip "${ip}"
+      )
     if [[ -z "$ip" || -z "$port" ]]; then
       echo "skip empty node"
       continue
@@ -95,7 +110,7 @@ function launch_localnet() {
     if [[ ! -e "$bls_key" ]]; then
       args=("${args[@]}" --blskey_file "BLSKEY")
     elif [[ -f "$bls_key" ]]; then
-      args=("${args[@]}" --blskey_file "${ROOT}/${bls_key}")
+      args=("${args[@]}" --blskey_file "${ROOT}/${bls_key}") # node读取这里
     elif [[ -d "$bls_key" ]]; then
       args=("${args[@]}" --blsfolder "${ROOT}/${bls_key}")
     else
@@ -125,6 +140,8 @@ function launch_localnet() {
     esac
 
     # Start the node
+    echo "args: ", ${args[@]}
+    echo "extra_args: ", ${extra_args[@]}
     ${DRYRUN} "${ROOT}/bin/harmony" "${args[@]}" "${extra_args[@]}" 2>&1 | tee -a "${LOG_FILE}" &
   done <"${config}"
 }

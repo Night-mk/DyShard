@@ -97,7 +97,9 @@ func (s *PublicPoolService) SendRawTransaction(
 			Str("hashByType", tx.HashByType().Hex()).
 			Str("contract", common2.MustAddressToBech32(addr)).
 			Msg("Submitted contract creation")
-	} else {
+	}
+	/*else {
+		// dynamic sharding log太多，注释
 		utils.Logger().Info().
 			Str("fullhash", tx.Hash().Hex()).
 			Str("hashByType", tx.HashByType().Hex()).
@@ -105,6 +107,7 @@ func (s *PublicPoolService) SendRawTransaction(
 			Interface("tx", tx).
 			Msg("Submitted transaction")
 	}
+	 */
 
 	// Response output is the same for all versions
 	return txHash, nil

@@ -76,7 +76,7 @@ type StateDB interface {
 
 	ForEachStorage(common.Address, func(common.Hash, common.Hash) bool) error
 
-	TxIndex() int
+	TxIndex() int  // 这里TxIndex会不会影响验证？
 	BlockHash() common.Hash
 	TxHash() common.Hash
 }

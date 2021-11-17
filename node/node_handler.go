@@ -257,6 +257,7 @@ func (node *Node) VerifyNewBlock(newBlock *types.Block) error {
 	if newBlock == nil || newBlock.Header() == nil {
 		return errors.New("nil header or block asked to verify")
 	}
+	//fmt.Println("====Receive block sttx====: ", newBlock.StateTransferTransactions())
 
 	if newBlock.ShardID() != node.Blockchain().ShardID() {
 		utils.Logger().Error().
@@ -269,6 +270,7 @@ func (node *Node) VerifyNewBlock(newBlock *types.Block) error {
 	if newBlock.NumberU64() <= node.Blockchain().CurrentBlock().NumberU64() {
 		return errors.Errorf("block with the same block number is already committed: %d", newBlock.NumberU64())
 	}
+	//fmt.Println("=====VerifyNewBlock can validateHeader=====")
 	if err := node.Blockchain().Validator().ValidateHeader(newBlock, true); err != nil {
 		utils.Logger().Error().
 			Str("blockHash", newBlock.Hash().Hex()).
@@ -277,6 +279,7 @@ func (node *Node) VerifyNewBlock(newBlock *types.Block) error {
 		return err
 	}
 
+	//fmt.Println("=====VerifyNewBlock can VerifyVRF=====")
 	if err := node.Blockchain().Engine().VerifyVRF(
 		node.Blockchain(), newBlock.Header(),
 	); err != nil {
@@ -289,6 +292,7 @@ func (node *Node) VerifyNewBlock(newBlock *types.Block) error {
 		)
 	}
 
+	//fmt.Println("=====VerifyNewBlock can VerifyShardState=====")
 	if err := node.Blockchain().Engine().VerifyShardState(
 		node.Blockchain(), node.Beaconchain(), newBlock.Header(),
 	); err != nil {
@@ -301,6 +305,8 @@ func (node *Node) VerifyNewBlock(newBlock *types.Block) error {
 		)
 	}
 
+	//fmt.Println("=====VerifyNewBlock can ValidateNewBlock=====")
+	// ValidateNewBlock 这里报错
 	if err := node.Blockchain().ValidateNewBlock(newBlock); err != nil {
 		if hooks := node.NodeConfig.WebHooks.Hooks; hooks != nil {
 			if p := hooks.ProtocolIssues; p != nil {
@@ -326,6 +332,7 @@ func (node *Node) VerifyNewBlock(newBlock *types.Block) error {
 		)
 	}
 
+
 	// Verify cross links
 	// TODO: move into ValidateNewBlock
 	if node.IsRunningBeaconChain() {
@@ -347,6 +354,8 @@ func (node *Node) VerifyNewBlock(newBlock *types.Block) error {
 			err, "[VerifyNewBlock] Cannot ValidateNewBlock",
 		)
 	}
+
+	//fmt.Println("=====VerifyNewBlock END without error=====")
 	return nil
 }
 

@@ -3,6 +3,8 @@ package downloader
 import (
 	"context"
 	"fmt"
+	atomicState "github.com/harmony-one/harmony/atomic/types"
+	"github.com/harmony-one/harmony/shard/mapping/load"
 	"math/big"
 	"sync"
 
@@ -124,6 +126,10 @@ func (bc *testBlockChain) SuperCommitteeForNextEpoch(beacon engine.ChainReader, 
 }
 
 type dummyEngine struct{}
+
+func (e *dummyEngine) Finalize1(chain engine.ChainReader, header *block.Header, state *state.DB, loadmapdb *load.LoadMapDB, txs []*types.Transaction, receipts []*types.Receipt, outcxs []*types.CXReceipt, incxs []*types.CXReceiptsProof, stks staking.StakingTransactions, sttxs atomicState.StateTransferTransactions, doubleSigners slash.Records, sigsReady chan bool, viewID func() uint64) (*types.Block, reward.Reader, error) {
+	return nil, nil, nil
+}
 
 func (e *dummyEngine) VerifyHeader(engine.ChainReader, *block.Header, bool) error {
 	return nil

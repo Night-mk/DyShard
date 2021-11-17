@@ -236,4 +236,20 @@ type Header interface {
 	// SetSlashes sets the RLP-encoded form of slashes
 	// It stores a copy; the caller may freely modify the original.
 	SetSlashes(newSlashes []byte)
+
+	/**
+		dynamic sharding
+	*/
+	// 新增loadMap状态根和stateTransfer交易的
+	// LoadMapRoot 返回loadMap trie的root hash
+	LoadMapRoot() common.Hash
+
+	// SetLoadMapRoot 设置loadMap trie的root hash
+	SetLoadMapRoot(newRoot common.Hash)
+
+	// TxHash 是stateTransferTransaction交易的RLP的hash.
+	StateTransferTxHash() common.Hash
+
+	// SetTxHash 设置stateTransferTransaction交易的RLP的hash field.
+	SetStateTransferTxHash(newTxHash common.Hash)
 }

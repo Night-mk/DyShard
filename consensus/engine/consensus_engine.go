@@ -1,6 +1,8 @@
 package engine
 
 import (
+	atomicState "github.com/harmony-one/harmony/atomic/types"
+	"github.com/harmony-one/harmony/shard/mapping/load"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -125,6 +127,19 @@ type Engine interface {
 		state *state.DB, txs []*types.Transaction,
 		receipts []*types.Receipt, outcxs []*types.CXReceipt,
 		incxs []*types.CXReceiptsProof, stks staking.StakingTransactions,
+		doubleSigners slash.Records, sigsReady chan bool, viewID func() uint64,
+	) (*types.Block, reward.Reader, error)
+
+	/**
+		dynamic sharding
+	 */
+	// 在Finalize上新增参数，stateTransfer交易
+	// Finalize1 函数：运行所有交易，修改状态（例如区块奖励），并组装返回最终区块。
+	Finalize1(
+		chain ChainReader, header *block.Header,
+		state *state.DB, loadmapdb *load.LoadMapDB, txs []*types.Transaction,
+		receipts []*types.Receipt, outcxs []*types.CXReceipt,
+		incxs []*types.CXReceiptsProof, stks staking.StakingTransactions, sttxs atomicState.StateTransferTransactions,
 		doubleSigners slash.Records, sigsReady chan bool, viewID func() uint64,
 	) (*types.Block, reward.Reader, error)
 }

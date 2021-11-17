@@ -21,6 +21,7 @@ import (
 	"github.com/harmony-one/harmony/core/state"
 	"github.com/harmony-one/harmony/core/types"
 	"github.com/harmony-one/harmony/core/vm"
+	"github.com/harmony-one/harmony/shard/mapping/load"
 )
 
 // Validator is an interface which defines the standard for block validation. It
@@ -34,6 +35,12 @@ type Validator interface {
 	// ValidateState validates the given statedb and optionally the receipts and
 	// gas used.
 	ValidateState(block *types.Block, state *state.DB, receipts types.Receipts, cxs types.CXReceipts, usedGas uint64) error
+
+	/**
+		dynamic sharding
+	 */
+	// ValidateLoadMapState 验证当前process之后的loadmap状态是否和新传入的区块相同
+	ValidateLoadMapState(block *types.Block, loadMapState *load.LoadMapDB) error
 
 	// ValidateHeader checks whether a header conforms to the consensus rules of a
 	// given engine. Verifying the seal may be done optionally here, or explicitly
@@ -56,6 +63,12 @@ type Validator interface {
 // failed.
 type Processor interface {
 	Process(block *types.Block, statedb *state.DB, cfg vm.Config) (
+		types.Receipts, types.CXReceipts,
+		[]*types.Log, uint64, reward.Reader, error,
+	)
+	/* dynamic sharding */
+	// 新增Process1 接口，可以处理loadmapdb
+	Process1(block *types.Block, statedb *state.DB, cfg vm.Config, loadmapdb *load.LoadMapDB) (
 		types.Receipts, types.CXReceipts,
 		[]*types.Log, uint64, reward.Reader, error,
 	)

@@ -1,6 +1,7 @@
 package shard
 
 import (
+	"github.com/ethereum/go-ethereum/rlp"
 	"math/big"
 
 	shardingconfig "github.com/harmony-one/harmony/internal/configs/sharding"
@@ -10,6 +11,10 @@ import (
 const (
 	// BeaconChainShardID is the ShardID of the BeaconChain
 	BeaconChainShardID = 0
+	// 将BeaconChainShardID改为5000，方便range-based mapping
+	//BeaconChainShardID = 5000
+	// 新增IniShardID
+	IniShardID = 5001
 )
 
 // TODO ek – Schedule should really be part of a general-purpose network
@@ -34,4 +39,24 @@ func ExternalSlotsAvailableForEpoch(epoch *big.Int) int {
 			Msg("have 0 external slots for in this epoch - perhaps bad config")
 	}
 	return stakedSlots
+}
+
+/*
+	dynamic sharding
+ */
+// 定义snapshot中的MapAccount
+type MapAccount struct {
+	TargetShardID uint32
+}
+
+// RLP编码
+func MapAccountRLP(targetId uint32) []byte {
+	mapacc := MapAccount{
+		TargetShardID: targetId,
+	}
+	data, err := rlp.EncodeToBytes(mapacc)
+	if err != nil {
+		panic(err)
+	}
+	return data
 }

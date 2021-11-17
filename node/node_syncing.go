@@ -190,17 +190,20 @@ func NewLocalSyncingPeerProvider(
 }
 
 // SyncingPeers returns local syncing peers using the sharding configuration.
+// dynamic sharding 多主机部署时需要增加localnet中的peer的ip
 func (p *LocalSyncingPeerProvider) SyncingPeers(shardID uint32) (peers []p2p.Peer, err error) {
 	if shardID >= p.numShards {
 		return nil, errors.Errorf(
 			"shard ID %d out of range 0..%d", shardID, p.numShards-1)
 	}
+	// localnet利用basePort和shardID，shardSize计算可以连接的节点
 	firstPort := uint32(p.basePort) + shardID
 	endPort := uint32(p.basePort) + p.numShards*p.shardSize
 	for port := firstPort; port < endPort; port += p.numShards {
 		if port == uint32(p.selfPort) {
 			continue // do not sync from self
 		}
+		//fmt.Println("node_syncing SyncingPeers localnet peer port: ", port)
 		peers = append(peers, p2p.Peer{IP: "127.0.0.1", Port: fmt.Sprint(port)})
 	}
 	return peers, nil

@@ -1,6 +1,7 @@
 package node
 
 import (
+	atomicCommit "github.com/harmony-one/harmony/atomic"
 	"context"
 	"fmt"
 	"math/big"
@@ -132,6 +133,11 @@ type Node struct {
 	// context control for pub-sub handling
 	psCtx    context.Context
 	psCancel func()
+
+	/* dynamic sharding */
+	// CommitPool
+	CommitPool *atomicCommit.CommitPool
+	twopcServer *atomicCommit.ServerShard // 在node中存一个全局变量，用于启动和停止2PC服务
 }
 
 // Blockchain returns the blockchain for the node's current shard.
@@ -161,7 +167,8 @@ func (node *Node) tryBroadcast(tx *types.Transaction) {
 	msg := proto_node.ConstructTransactionListMessageAccount(types.Transactions{tx})
 
 	shardGroupID := nodeconfig.NewGroupIDByShardID(nodeconfig.ShardID(tx.ShardID()))
-	utils.Logger().Info().Str("shardGroupID", string(shardGroupID)).Msg("tryBroadcast")
+	// dynamic sharding log太多，注释
+	//utils.Logger().Info().Str("shardGroupID", string(shardGroupID)).Msg("tryBroadcast")
 
 	for attempt := 0; attempt < NumTryBroadCast; attempt++ {
 		if err := node.host.SendMessageToGroups([]nodeconfig.GroupID{shardGroupID},
@@ -209,13 +216,15 @@ func (node *Node) addPendingTransactions(newTxs types.Transactions) []error {
 	}
 	errs = append(errs, node.TxPool.AddRemotes(poolTxs)...)
 
-	pendingCount, queueCount := node.TxPool.Stats()
-	utils.Logger().Info().
-		Interface("err", errs).
-		Int("length of newTxs", len(newTxs)).
-		Int("totalPending", pendingCount).
-		Int("totalQueued", queueCount).
-		Msg("[addPendingTransactions] Adding more transactions")
+	// dynamic sharding 先注释整理的log输出
+	//pendingCount, queueCount := node.TxPool.Stats()
+	//
+	//utils.Logger().Info().
+	//	Interface("err", errs).
+	//	Int("length of newTxs", len(newTxs)).
+	//	Int("totalPending", pendingCount).
+	//	Int("totalQueued", queueCount).
+	//	Msg("[addPendingTransactions] Adding more transactions")
 	return errs
 }
 
@@ -286,7 +295,8 @@ func (node *Node) AddPendingTransaction(newTx *types.Transaction) error {
 			}
 		}
 		if err == nil || node.BroadcastInvalidTx {
-			utils.Logger().Info().Str("Hash", newTx.Hash().Hex()).Str("HashByType", newTx.HashByType().Hex()).Msg("Broadcasting Tx")
+			// dynamic sharding 注释这句，log太多
+			//utils.Logger().Info().Str("Hash", newTx.Hash().Hex()).Str("HashByType", newTx.HashByType().Hex()).Msg("Broadcasting Tx")
 			node.tryBroadcast(newTx)
 		}
 		return err
@@ -930,6 +940,7 @@ func (node *Node) GetSyncID() [SyncIDLength]byte {
 }
 
 // New creates a new node.
+// 初始化以一个新节点对象
 func New(
 	host p2p.Host,
 	consensusObj *consensus.Consensus,
@@ -942,6 +953,9 @@ func New(
 	node.TransactionErrorSink = types.NewTransactionErrorSink()
 	// Get the node config that's created in the harmony.go program.
 	if consensusObj != nil {
+		// dynamic sharding
+		// 节点的配置config是从shardConfig里设置的，不是使用默认设置
+		//fmt.Println("consensusObj !=nil") // execute here
 		node.NodeConfig = nodeconfig.GetShardConfig(consensusObj.ShardID)
 	} else {
 		node.NodeConfig = nodeconfig.GetDefaultConfig()
@@ -983,7 +997,7 @@ func New(
 			if b2 {
 				shardID := node.NodeConfig.ShardID
 				// HACK get the real error reason
-				_, err = node.shardChains.ShardChain(shardID)
+				_, err = node.shardChains.ShardChain(shardID) // 这里的子程序报错
 			} else {
 				_, err = node.shardChains.ShardChain(shard.BeaconChainShardID)
 			}
@@ -1000,6 +1014,11 @@ func New(
 		node.TxPool = core.NewTxPool(txPoolConfig, node.Blockchain().Config(), blockchain, node.TransactionErrorSink)
 		node.CxPool = core.NewCxPool(core.CxPoolSize)
 		node.Worker = worker.New(node.Blockchain().Config(), blockchain, engine)
+
+		/* dynamic sharding */
+		// 新增對CommitPool的初始化
+		node.CommitPool = atomicCommit.NewCommitPool(blockchain)
+		// 初始化2PC的服务，不知道是不是在这里注册服务
 
 		node.deciderCache, _ = lru.New(16)
 		node.committeeCache, _ = lru.New(16)
@@ -1065,6 +1084,7 @@ func New(
 	initMetrics()
 	nodeStringCounterVec.WithLabelValues("version", nodeconfig.GetVersion()).Inc()
 
+	// 初始化serviceManager
 	node.serviceManager = service.NewManager()
 
 	return &node

@@ -64,6 +64,7 @@ func (sender *MessageSender) SendWithRetry(blockNum uint64, msgType msg_pb.Messa
 		sender.StopRetry(msgType)
 		sender.messagesToRetry.Store(msgType, &msgRetry)
 		go func() {
+			//fmt.Println("[SendWithRetry]") // 打印retry的原因
 			sender.Retry(&msgRetry)
 		}()
 	}
@@ -79,6 +80,7 @@ func (sender *MessageSender) DelayedSendWithRetry(blockNum uint64, msgType msg_p
 		sender.StopRetry(msgType)
 		sender.messagesToRetry.Store(msgType, &msgRetry)
 		go func() {
+			//fmt.Println("[DelayedSendWithRetry]") // 打印retry的原因
 			sender.Retry(&msgRetry)
 		}()
 	}

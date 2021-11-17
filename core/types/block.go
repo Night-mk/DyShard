@@ -44,6 +44,7 @@ import (
 	"github.com/harmony-one/taggedrlp"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
+	atomicState "github.com/harmony-one/harmony/atomic/types"
 )
 
 const (
@@ -127,6 +128,15 @@ type BodyInterface interface {
 	// SetIncomingReceipts sets the list of incoming cross-shard transaction
 	// receipts of this block with a dep copy of the given list.
 	SetIncomingReceipts(newIncomingReceipts CXReceiptsProofs)
+
+	/**
+		dynamic sharding
+	*/
+	// StateTransferTransactions 返回stateTransfer交易的deep copy
+	StateTransferTransactions() []*atomicState.StateTransferTransaction
+
+	// SetStateTransferTransactions 使用给定列表的deep copy设置stateTransfer交易列表
+	SetStateTransferTransactions(newStateTransferTransactions []*atomicState.StateTransferTransaction)
 }
 
 // Body is a simple (mutable, non-safe) data container for storing and moving
@@ -212,6 +222,8 @@ type Block struct {
 	transactions        Transactions
 	stakingTransactions staking.StakingTransactions
 	incomingReceipts    CXReceiptsProofs
+	// dynamic sharding
+	stateTransferTransactions atomicState.StateTransferTransactions
 
 	// caches
 	hash atomic.Value
@@ -280,6 +292,7 @@ func (b *Block) DeprecatedTd() *big.Int {
 }
 
 // "external" block encoding. used for eth protocol, etc.
+// 这个是干嘛的？
 type extblock struct {
 	Header *block.Header
 	Txs    []*Transaction
@@ -301,6 +314,7 @@ type extblockV2 struct {
 	Stks             []*staking.StakingTransaction
 	Uncles           []*block.Header
 	IncomingReceipts CXReceiptsProofs
+	StateTransferTxs []*atomicState.StateTransferTransaction // dynamic sharding 修改
 }
 
 var onceBlockReg sync.Once
@@ -378,6 +392,82 @@ func NewBlock(
 	return b
 }
 
+/**
+	dynamic sharding
+ */
+// 新增NewBlock1函数，增加stateTransfer交易参数
+// 创建新区块，将输入数据拷贝一份到新区块中
+func NewBlock1(
+	header *block.Header, txs []*Transaction,
+	receipts []*Receipt, outcxs []*CXReceipt, incxs []*CXReceiptsProof,
+	stks []*staking.StakingTransaction, sttxs []*atomicState.StateTransferTransaction) *Block {
+
+	b := &Block{header: CopyHeader(header)}
+
+	//if len(receipts) != len(txs)+len(stks) {
+	if len(receipts) != len(txs)+len(stks)+len(sttxs) { // 改为加上sttx的长度
+		utils.Logger().Error().
+			Int("receiptsLen", len(receipts)).
+			Int("txnsLen", len(txs)).
+			Int("stakingTxnsLen", len(stks)).
+			Msg("Length of receipts doesn't match length of transactions")
+		return nil
+	}
+
+	// Put transactions into block
+	if len(txs) == 0 && len(stks) == 0 {
+		b.header.SetTxHash(EmptyRootHash)
+	} else {
+		b.transactions = make(Transactions, len(txs))
+		copy(b.transactions, txs)
+
+		b.stakingTransactions = make(staking.StakingTransactions, len(stks))
+		copy(b.stakingTransactions, stks)
+
+		b.header.SetTxHash(DeriveSha(
+			Transactions(txs),
+			staking.StakingTransactions(stks),
+		))
+	}
+
+	// Put receipts into block
+	if len(receipts) == 0 {
+		b.header.SetReceiptHash(EmptyRootHash)
+	} else {
+		b.header.SetReceiptHash(DeriveSha(Receipts(receipts)))
+		b.header.SetBloom(CreateBloom(receipts))
+	}
+
+	// Put cross-shard receipts (ingres/egress) into block
+	b.header.SetOutgoingReceiptHash(CXReceipts(outcxs).ComputeMerkleRoot())
+	if len(incxs) == 0 {
+		b.header.SetIncomingReceiptHash(EmptyRootHash)
+	} else {
+		b.header.SetIncomingReceiptHash(DeriveSha(CXReceiptsProofs(incxs)))
+		b.incomingReceipts = make(CXReceiptsProofs, len(incxs))
+		copy(b.incomingReceipts, incxs)
+	}
+
+	/* dynamic sharding */
+	// 将stateTransfer交易加入到区块中, 并计算交易trie的root哈希值设置到StateTransferTxHash中
+	//fmt.Println("===NewBlock1: Propose Block write sttx===", sttxs)
+	if len(sttxs) == 0{
+		b.header.SetStateTransferTxHash(EmptyRootHash)
+	} else {
+		b.stateTransferTransactions = make(atomicState.StateTransferTransactions, len(sttxs))
+		copy(b.stateTransferTransactions, sttxs)
+		b.header.SetStateTransferTxHash(DeriveSha(atomicState.StateTransferTransactions(sttxs)))
+	}
+
+	//if b == nil{
+	//	fmt.Println("=======block NewBlock1 return block nil========")
+	//}
+
+	// Great! Block is finally finalized.
+	return b
+}
+
+
 // NewBlockWithHeader creates a block with the given header data. The
 // header data is copied, changes to header and to the field values
 // will not affect the block.
@@ -397,6 +487,8 @@ func CopyHeader(h *block.Header) *block.Header {
 }
 
 // DecodeRLP decodes the Ethereum
+// dynamic sharding
+// 修改block的rlp编码，解码内容
 func (b *Block) DecodeRLP(s *rlp.Stream) error {
 	_, size, _ := s.Kind()
 	registry := blockRegistry()
@@ -405,11 +497,14 @@ func (b *Block) DecodeRLP(s *rlp.Stream) error {
 		return err
 	}
 	switch eb := eb.(type) {
-	case *extblockV2:
-		b.header, b.uncles, b.transactions, b.incomingReceipts, b.stakingTransactions = eb.Header, eb.Uncles, eb.Txs, eb.IncomingReceipts, eb.Stks
+	case *extblockV2: // block用的V2 dynamic sharding 对V2做修改
+		//fmt.Println("============USE V2 BLOCK DECODE===================")
+		b.header, b.uncles, b.transactions, b.incomingReceipts, b.stakingTransactions, b.stateTransferTransactions = eb.Header, eb.Uncles, eb.Txs, eb.IncomingReceipts, eb.Stks, eb.StateTransferTxs
 	case *extblockV1:
+		//fmt.Println("============USE V1 BLOCK DECODE===================")
 		b.header, b.uncles, b.transactions, b.incomingReceipts = eb.Header, eb.Uncles, eb.Txs, eb.IncomingReceipts
 	case *extblock:
+		//fmt.Println("============USE EXT BLOCK DECODE===================")
 		b.header, b.uncles, b.transactions, b.incomingReceipts = eb.Header, eb.Uncles, eb.Txs, nil
 	default:
 		return errors.Errorf("unknown extblock type %s", taggedrlp.TypeName(reflect.TypeOf(eb)))
@@ -423,11 +518,14 @@ func (b *Block) EncodeRLP(w io.Writer) error {
 	var eb interface{}
 
 	switch h := b.header.Header.(type) {
-	case *v3.Header:
-		eb = extblockV2{b.header, b.transactions, b.stakingTransactions, b.uncles, b.incomingReceipts}
+	case *v3.Header: // 用的是V3的Encode dynamic sharding
+		//fmt.Println("============USE V3 BLOCK ENCODE===================")
+		eb = extblockV2{b.header, b.transactions, b.stakingTransactions, b.uncles, b.incomingReceipts, b.stateTransferTransactions}
 	case *v2.Header, *v1.Header:
+		//fmt.Println("============USE V1,V2 BLOCK ENCODE===================")
 		eb = extblockV1{b.header, b.transactions, b.uncles, b.incomingReceipts}
 	case *v0.Header:
+		//fmt.Println("============USE V10 BLOCK ENCODE===================")
 		if len(b.incomingReceipts) > 0 {
 			return errors.New("incomingReceipts unsupported in v0 block")
 		}
@@ -466,6 +564,11 @@ func (b *Block) IncomingReceipts() CXReceiptsProofs {
 	return b.incomingReceipts
 }
 
+// 新增 StateTransferTransactions 返回stateTransfer交易列表
+func (b *Block) StateTransferTransactions() atomicState.StateTransferTransactions{
+	return b.stateTransferTransactions
+}
+
 // Number returns header number.
 func (b *Block) Number() *big.Int { return b.header.Number() }
 
@@ -499,6 +602,15 @@ func (b *Block) Coinbase() common.Address { return b.header.Coinbase() }
 // Root returns header root.
 func (b *Block) Root() common.Hash { return b.header.Root() }
 
+/**
+	dynamic sharding
+ */
+// LoadMapRoot 返回loadMap root hash
+func (b *Block) LoadMapRoot() common.Hash {return b.header.LoadMapRoot()}
+
+// StateTransferTxHash 返回StateTransferTx root hash
+func (b *Block) StateTransferTxHash() common.Hash {return b.header.StateTransferTxHash()}
+
 // ParentHash return header parent hash.
 func (b *Block) ParentHash() common.Hash { return b.header.ParentHash() }
 
@@ -518,6 +630,7 @@ func (b *Block) Extra() []byte { return b.header.Extra() }
 func (b *Block) Header() *block.Header { return CopyHeader(b.header) }
 
 // Body returns the non-header content of the block.
+/* dynamic sharding */
 func (b *Block) Body() *Body {
 	body, err := NewBodyForMatchingHeader(b.header)
 	if err != nil {
@@ -529,6 +642,7 @@ func (b *Block) Body() *Body {
 		StakingTransactions(b.stakingTransactions).
 		Uncles(b.uncles).
 		IncomingReceipts(b.incomingReceipts).
+		StateTransferTransactions(b.stateTransferTransactions). // 返回内容增加stateTransfer交易列表
 		Body()
 }
 
@@ -580,8 +694,32 @@ func (b *Block) WithBody(transactions []*Transaction, stakingTxns []*staking.Sta
 	return block
 }
 
+/**
+	dynamic sharding
+ */
+// WithBody1 根据给定交易和叔区块的内容返回一个新区块
+func (b *Block) WithBody1(transactions []*Transaction, stakingTxns []*staking.StakingTransaction, uncles []*block.Header, incomingReceipts CXReceiptsProofs, stateTransferTxs []*atomicState.StateTransferTransaction) *Block {
+	block := &Block{
+		header:              CopyHeader(b.header),
+		transactions:        make([]*Transaction, len(transactions)),
+		stakingTransactions: make([]*staking.StakingTransaction, len(stakingTxns)),
+		uncles:              make([]*block.Header, len(uncles)),
+		incomingReceipts:    make([]*CXReceiptsProof, len(incomingReceipts)),
+		stateTransferTransactions: make([]*atomicState.StateTransferTransaction, len(stateTransferTxs)), // 新增stateTransfer交易
+	}
+	copy(block.transactions, transactions)
+	copy(block.stakingTransactions, stakingTxns)
+	copy(block.incomingReceipts, incomingReceipts)
+	copy(block.stateTransferTransactions, stateTransferTxs)
+	for i := range uncles {
+		block.uncles[i] = CopyHeader(uncles[i])
+	}
+	return block
+}
+
 // Hash returns the keccak256 hash of b's header.
 // The hash is computed on the first call and cached thereafter.
+// 返回该区块Header的hash值
 func (b *Block) Hash() common.Hash {
 	//if hash := b.hash.Load(); hash != nil {
 	//	return hash.(common.Hash)

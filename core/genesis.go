@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/harmony-one/harmony/shard/mapping/load"
 	"math/big"
 	"os"
 	"strings"
@@ -233,6 +234,8 @@ func (g *Genesis) configOrDefault(ghash common.Hash) *params.ChainConfig {
 	}
 }
 
+// dynamic sharding
+// 创建创世区块，并写入state， loadMap有问题可能是没有做初始化？
 // ToBlock creates the genesis block and writes state of a genesis specification
 // to the given database (or discards it if nil).
 func (g *Genesis) ToBlock(db ethdb.Database) *types.Block {
@@ -275,10 +278,65 @@ func (g *Genesis) ToBlock(db ethdb.Database) *types.Block {
 	return types.NewBlock(head, nil, nil, nil, nil, nil)
 }
 
+/*
+	dynamic sharding
+ */
+// ToBlock1 创建创世区块，并且将预定义的状态写入数据库
+// 新增loadMap的状态写入
+func (g *Genesis) ToBlock1(db ethdb.Database) *types.Block {
+	if db == nil {
+		utils.Logger().Error().Msg("db should be initialized")
+		os.Exit(1)
+	}
+	statedb, _ := state.New(common.Hash{}, state.NewDatabase(db))
+	loadmapdb, _:= load.New(common.Hash{}, state.NewDatabase(db)) // 初始化loadMap
+	for addr, account := range g.Alloc {
+		statedb.AddBalance(addr, account.Balance)
+		statedb.SetCode(addr, account.Code)
+		statedb.SetNonce(addr, account.Nonce)
+		for key, value := range account.Storage {
+			statedb.SetState(addr, key, value)
+		}
+	}
+	root := statedb.IntermediateRoot(false)
+	loadmaproot := loadmapdb.IntermediateRoot(false) // 计算root
+	shardStateBytes, err := shard.EncodeWrapper(g.ShardState, false)
+	if err != nil {
+		utils.Logger().Error().Msg("failed to rlp-serialize genesis shard state")
+		os.Exit(1)
+	}
+	head := g.Factory.NewHeader(common.Big0).With().
+		Number(new(big.Int).SetUint64(g.Number)).
+		ShardID(g.ShardID).
+		Time(new(big.Int).SetUint64(g.Timestamp)).
+		ParentHash(g.ParentHash).
+		Extra(g.ExtraData).
+		GasLimit(g.GasLimit).
+		GasUsed(g.GasUsed).
+		MixDigest(g.Mixhash).
+		Coinbase(g.Coinbase).
+		Root(root).
+		LoadMapRoot(loadmaproot). // loadmap
+		ShardStateHash(g.ShardStateHash).
+		ShardState(shardStateBytes).
+		Header()
+	statedb.Commit(false)
+	statedb.Database().TrieDB().Commit(root, true)
+
+	loadmapdb.Commit(false)
+	loadmapdb.Database().TrieDB().Commit(loadmaproot, true)
+
+	//return types.NewBlock(head, nil, nil, nil, nil, nil)
+	return types.NewBlock1(head, nil, nil, nil, nil, nil, nil)
+
+}
+
 // Commit writes the block and state of a genesis specification to the database.
 // The block is committed as the canonical head block.
 func (g *Genesis) Commit(db ethdb.Database) (*types.Block, error) {
-	block := g.ToBlock(db)
+	// dynamic shading
+	//block := g.ToBlock(db)
+	block := g.ToBlock1(db) // 使用ToBlock1来创建初始化创世区块
 	if block.Number().Sign() != 0 {
 		return nil, fmt.Errorf("can't commit genesis block with number > 0")
 	}

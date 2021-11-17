@@ -29,6 +29,7 @@ type MessageCategory byte
 const (
 	Consensus MessageCategory = iota
 	Node
+	Commit // 新增Commit类型的通用消息
 	Client // deprecated
 	DRand  // not used
 )

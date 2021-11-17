@@ -10,6 +10,7 @@ case "${HMY_PATH+set}" in
 "")
    unset -v gopath
    gopath=$(go env GOPATH)
+   echo gopath
    # HMY_PATH is the common root directory of all harmony repos
    HMY_PATH="${gopath%%:*}/src/github.com/harmony-one"
    if [ ! -d $HMY_PATH ]; then
@@ -25,6 +26,7 @@ esac
 export CGO_CFLAGS="-I${BLS_DIR}/include -I${MCL_DIR}/include"
 export CGO_LDFLAGS="-L${BLS_DIR}/lib"
 export LD_LIBRARY_PATH=${BLS_DIR}/lib:${MCL_DIR}/lib
+echo "test bls build flags"
 
 OS=$(uname -s)
 case $OS in

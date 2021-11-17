@@ -122,6 +122,8 @@ func lookupDelegatorShares(
 // AccumulateRewardsAndCountSigs credits the coinbase of the given block with the mining
 // reward. The total reward consists of the static block reward
 // This func also do IncrementValidatorSigningCounts for validators
+// AccumulateRewardsAndCountSigs 将挖矿奖励记入给定区块的coinbase账户，总奖励包括静态区块奖励
+// 这是个很重要的函数？
 func AccumulateRewardsAndCountSigs(
 	bc engine.ChainReader, state *state.DB,
 	header *block.Header, beaconChain engine.ChainReader, sigsReady chan bool,
@@ -199,6 +201,7 @@ func AccumulateRewardsAndCountSigs(
 
 		// Handle rewards for shardchain
 		if cxLinks := header.CrossLinks(); len(cxLinks) > 0 {
+			fmt.Println("================Handle cross link data in BeaconChain===================")
 			utils.AnalysisStart("accumulateRewardShardchainPayout", nowEpoch, blockNow)
 			crossLinks := types.CrossLinks{}
 			if err := rlp.DecodeBytes(cxLinks, &crossLinks); err != nil {

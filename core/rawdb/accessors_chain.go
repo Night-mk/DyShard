@@ -355,7 +355,9 @@ func ReadBlock(db DatabaseReader, hash common.Hash, number uint64) *types.Block 
 	if body == nil {
 		return nil
 	}
-	return types.NewBlockWithHeader(header).WithBody(body.Transactions(), body.StakingTransactions(), body.Uncles(), body.IncomingReceipts())
+	//return types.NewBlockWithHeader(header).WithBody(body.Transactions(), body.StakingTransactions(), body.Uncles(), body.IncomingReceipts())
+	// dynamic sharding 修改
+	return types.NewBlockWithHeader(header).WithBody1(body.Transactions(), body.StakingTransactions(), body.Uncles(), body.IncomingReceipts(), body.StateTransferTransactions())
 }
 
 // WriteBlock serializes a block into the database, header and body separately.

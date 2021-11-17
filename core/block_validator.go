@@ -21,6 +21,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"github.com/harmony-one/harmony/shard/mapping/load"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -59,6 +60,8 @@ func NewBlockValidator(config *params.ChainConfig, blockchain *BlockChain, engin
 // The headers are assumed to be already validated at this point.
 func (v *BlockValidator) ValidateBody(block *types.Block) error {
 	// Check whether the block's known, and if not, that it's linkable
+	// block.Hash()返回该区块Header的hash值
+	// 检查block和相应的state是否已经存在
 	if v.bc.HasBlockAndState(block.Hash(), block.NumberU64()) {
 		return ErrKnownBlock
 	}
@@ -68,6 +71,16 @@ func (v *BlockValidator) ValidateBody(block *types.Block) error {
 		}
 		return consensus_engine.ErrPrunedAncestor
 	}
+	// dynamic sharding
+	// 检查相应的loadMap state是否存在
+	if v.bc.HasBlockAndLoadMapState(block.Hash(), block.NumberU64()){
+		return ErrKnownBlock
+	}
+	if !v.bc.HasBlockAndLoadMapState(block.ParentHash(), block.NumberU64()-1) {
+		return consensus_engine.ErrPrunedAncestor
+	}
+	// END
+
 	// Header validity is known at this point, check the uncles and transactions
 	header := block.Header()
 	//if err := v.engine.VerifyUncles(v.bc, block); err != nil {
@@ -79,6 +92,15 @@ func (v *BlockValidator) ValidateBody(block *types.Block) error {
 	); hash != header.TxHash() {
 		return fmt.Errorf("transaction root hash mismatch: have %x, want %x", hash, header.TxHash())
 	}
+	// dynamic sharding
+	// 检查block的stateTransfer交易计算的hash值是否和header中的相同
+	if hash1 := types.DeriveSha(
+		block.StateTransferTransactions(),
+	); hash1 != header.StateTransferTxHash() {
+		return fmt.Errorf("stateTransferTransaction root hash mismatch: have %x, want %x", hash1, header.StateTransferTxHash())
+	}
+	// END
+
 	return nil
 }
 
@@ -89,17 +111,20 @@ func (v *BlockValidator) ValidateBody(block *types.Block) error {
 func (v *BlockValidator) ValidateState(block *types.Block, statedb *state.DB, receipts types.Receipts, cxReceipts types.CXReceipts, usedGas uint64) error {
 	header := block.Header()
 	if block.GasUsed() != usedGas {
+		fmt.Println("======ValidateState: gas error======")
 		return fmt.Errorf("invalid gas used (remote: %d local: %d)", block.GasUsed(), usedGas)
 	}
 	// Validate the received block's bloom with the one derived from the generated receipts.
 	// For valid blocks this should always validate to true.
 	rbloom := types.CreateBloom(receipts)
 	if rbloom != header.Bloom() {
+		fmt.Println("======ValidateState: receipts bloom error======")
 		return fmt.Errorf("invalid bloom (remote: %x  local: %x)", header.Bloom(), rbloom)
 	}
 	// Tre receipt Trie's root (R = (Tr [[H1, R1], ... [Hn, R1]]))
 	receiptSha := types.DeriveSha(receipts)
 	if receiptSha != header.ReceiptHash() {
+		fmt.Println("======ValidateState: receiptSha error======")
 		return fmt.Errorf("invalid receipt root hash (remote: %x local: %x)", header.ReceiptHash(), receiptSha)
 	}
 
@@ -116,23 +141,43 @@ func (v *BlockValidator) ValidateState(block *types.Block, statedb *state.DB, re
 	// Validate the state root against the received state root and throw
 	// an error if they don't match.
 	if root := statedb.IntermediateRoot(v.config.IsS3(header.Epoch())); header.Root() != root {
+		fmt.Println("======ValidateState: invalid merkle root of StateDB======")
 		dump, _ := rlp.EncodeToBytes(header)
-		const msg = "invalid merkle root (remote: %x local: %x, rlp dump %s)"
+		const msg = "invalid merkle root of StateDB (remote: %x local: %x, rlp dump %s)"
 		return fmt.Errorf(msg, header.Root(), root, hex.EncodeToString(dump))
 	}
 	return nil
 }
+
+/**
+	dynamic sharding
+ */
+// 验证loadMapState
+func (v *BlockValidator) ValidateLoadMapState(block *types.Block, loadMapState *load.LoadMapDB) error{
+	header := block.Header()
+	root := loadMapState.IntermediateRoot(v.config.IsS3(header.Epoch()))
+	if header.LoadMapRoot() != root{
+		dump, _ := rlp.EncodeToBytes(header)
+		const msg = "invalid merkle root of LoadMapState (remote: %x local: %x, rlp dump %s)"
+		return fmt.Errorf(msg, header.LoadMapRoot(), root, hex.EncodeToString(dump))
+	}
+	return nil
+}
+
 
 // ValidateHeader checks whether a header conforms to the consensus rules of a
 // given engine. Verifying the seal may be done optionally here, or explicitly
 // via the VerifySeal method.
 func (v *BlockValidator) ValidateHeader(block *types.Block, seal bool) error {
 	if block == nil {
+		//fmt.Println("====== ValidateHeader block is nil ======")
 		return errors.New("block is nil")
 	}
 	if h := block.Header(); h != nil {
+		//fmt.Println("====== can ValidateHeader ======")
 		return v.engine.VerifyHeader(v.bc, h, true)
 	}
+	//fmt.Println("====== ValidateHeader header field was nil ======")
 	return errors.New("header field was nil")
 }
 

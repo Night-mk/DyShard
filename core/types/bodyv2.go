@@ -7,6 +7,7 @@ import (
 
 	"github.com/harmony-one/harmony/block"
 	staking "github.com/harmony-one/harmony/staking/types"
+	atomicState "github.com/harmony-one/harmony/atomic/types"
 )
 
 // BodyV2 is the V2 block body
@@ -19,6 +20,7 @@ type bodyFieldsV2 struct {
 	StakingTransactions []*staking.StakingTransaction
 	Uncles              []*block.Header
 	IncomingReceipts    CXReceiptsProofs
+	StateTransferTransactions []*atomicState.StateTransferTransaction
 }
 
 // Transactions returns the list of transactions.
@@ -135,3 +137,32 @@ func (b *BodyV2) EncodeRLP(w io.Writer) error {
 func (b *BodyV2) DecodeRLP(s *rlp.Stream) error {
 	return s.Decode(&b.f)
 }
+
+/**
+dynamic sharding
+*/
+// 实现BodyInterface接口
+func (b *BodyV2) StateTransferTransactions() (txs []*atomicState.StateTransferTransaction) {
+	for _, tx := range b.f.StateTransferTransactions {
+		txs = append(txs, tx.Copy())
+	}
+	return txs
+}
+
+// 设置body中的stateTransfer交易列表
+func (b *BodyV2) SetStateTransferTransactions(newStateTransferTransactions []*atomicState.StateTransferTransaction) {
+	var txs []*atomicState.StateTransferTransaction
+	for _, tx := range newStateTransferTransactions {
+		txs = append(txs, tx.Copy())
+	}
+	b.f.StateTransferTransactions = txs
+}
+
+//func (b *BodyV2) SetTransactions(newTransactions []*Transaction) {
+//	var txs []*Transaction
+//	for _, tx := range newTransactions {
+//		txs = append(txs, tx.Copy())
+//	}
+//	b.f.Transactions = txs
+//}
+

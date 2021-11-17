@@ -97,7 +97,7 @@ type CoreTransaction interface {
 type Transaction struct {
 	data txdata
 	// caches
-	hash atomic.Value
+	hash atomic.Value // 存储交易hash，如果缓存中没有，通过Hash()函数计算，并放在缓存中
 	size atomic.Value
 	from atomic.Value
 }
@@ -125,16 +125,16 @@ func (txType TransactionType) String() string {
 }
 
 type txdata struct {
-	AccountNonce uint64          `json:"nonce"      gencodec:"required"`
-	Price        *big.Int        `json:"gasPrice"   gencodec:"required"`
-	GasLimit     uint64          `json:"gas"        gencodec:"required"`
-	ShardID      uint32          `json:"shardID"    gencodec:"required"`
-	ToShardID    uint32          `json:"toShardID"  gencodec:"required"`
-	Recipient    *common.Address `json:"to"         rlp:"nil"` // nil means contract creation
-	Amount       *big.Int        `json:"value"      gencodec:"required"`
-	Payload      []byte          `json:"input"      gencodec:"required"`
+	AccountNonce uint64          `json:"nonce"      gencodec:"required"` // 交易发送者已经发送交易的次数
+	Price        *big.Int        `json:"gasPrice"   gencodec:"required"` // 此交易的gas费用
+	GasLimit     uint64          `json:"gas"        gencodec:"required"` // 本次交易允许消耗gas的最大数量
+	ShardID      uint32          `json:"shardID"    gencodec:"required"` //
+	ToShardID    uint32          `json:"toShardID"  gencodec:"required"` //
+	Recipient    *common.Address `json:"to"         rlp:"nil"` // nil means contract creation 交易的接收者
+	Amount       *big.Int        `json:"value"      gencodec:"required"` // 交易的token数量
+	Payload      []byte          `json:"input"      gencodec:"required"` // 交易携带的数据, payload的数据通常在合约调用的时候会被读取使用
 
-	// Signature values
+	// Signature values 交易的签名数据
 	V *big.Int `json:"v" gencodec:"required"`
 	R *big.Int `json:"r" gencodec:"required"`
 	S *big.Int `json:"s" gencodec:"required"`
@@ -186,20 +186,24 @@ type txdataMarshaling struct {
 }
 
 // NewTransaction returns new transaction, this method is to create same shard transaction
+// 创建普通交易(同分片)
 func NewTransaction(nonce uint64, to common.Address, shardID uint32, amount *big.Int, gasLimit uint64, gasPrice *big.Int, data []byte) *Transaction {
 	return newTransaction(nonce, &to, shardID, amount, gasLimit, gasPrice, data)
 }
 
 // NewCrossShardTransaction returns new cross shard transaction
+// 创建普通交易(不同分片)
 func NewCrossShardTransaction(nonce uint64, to *common.Address, shardID uint32, toShardID uint32, amount *big.Int, gasLimit uint64, gasPrice *big.Int, data []byte) *Transaction {
 	return newCrossShardTransaction(nonce, to, shardID, toShardID, amount, gasLimit, gasPrice, data)
 }
 
 // NewContractCreation returns same shard contract transaction.
+// 创建合约交易
 func NewContractCreation(nonce uint64, shardID uint32, amount *big.Int, gasLimit uint64, gasPrice *big.Int, data []byte) *Transaction {
 	return newTransaction(nonce, nil, shardID, amount, gasLimit, gasPrice, data)
 }
 
+// 创建同链交易
 func newTransaction(nonce uint64, to *common.Address, shardID uint32, amount *big.Int, gasLimit uint64, gasPrice *big.Int, data []byte) *Transaction {
 	if len(data) > 0 {
 		data = common.CopyBytes(data)
@@ -628,7 +632,7 @@ func (t *TransactionsByPriceAndNonce) Pop() {
 	heap.Pop(&t.heads)
 }
 
-// Message is a fully derived transaction and implements core.Message
+// Message is a fully derived transaction and implements core.Message 是一种完全派生的事务
 // NOTE: In a future PR this will be removed.
 type Message struct {
 	to         *common.Address

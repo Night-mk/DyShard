@@ -89,6 +89,7 @@ func printVersion(me string) {
 }
 
 func main() {
+	//fmt.Println("test bootnode main!!!!")
 	ip := flag.String("ip", "127.0.0.1", "IP of the node")
 	port := flag.String("port", "9876", "port of the node.")
 	logFolder := flag.String("log_folder", "latest", "the folder collecting the logs of this execution")
@@ -117,6 +118,7 @@ func main() {
 	// For bootstrap nodes, we shall keep .dht file.
 	dataStorePath := fmt.Sprintf(".dht-%s-%s", *ip, *port)
 	selfPeer := p2p.Peer{IP: *ip, Port: *port}
+	// 初始化网络主机作为node
 	host, err := p2p.NewHost(p2p.HostConfig{
 		Self:          &selfPeer,
 		BLSKey:        privKey,

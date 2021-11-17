@@ -12,6 +12,18 @@ import (
 )
 
 var (
+	// dynamic sharding
+	twopcFlags = []cli.Flag{
+		RoleFlag,
+		NodeaddrFlag,
+		CoordinatorFlag,
+		FollowersFlag,
+		WhitelistFlag,
+		CommitTypeFlag,
+		TimeoutFlag,
+	}
+	// END
+
 	generalFlags = []cli.Flag{
 		nodeTypeFlag,
 		noStakingFlag,
@@ -294,8 +306,105 @@ func getRootFlags() []cli.Flag {
 	flags = append(flags, prometheusFlags...)
 	flags = append(flags, syncFlags...)
 
+	// dynamic sharding
+	// 在rootFlags里面加入twopcFlags
+	flags = append(flags, twopcFlags...)
+
 	return flags
 }
+
+/*
+	dyanmic sharding
+	flags
+ */
+var (
+	RoleFlag = cli.StringFlag{
+		Name:     "role",
+		Usage:    "role (coordinator of follower)",
+		DefValue: "follower",
+	}
+	NodeaddrFlag = cli.StringFlag{
+		Name:     "nodeaddr",
+		Usage:    "node address for 2PC",
+		DefValue: "",
+	}
+	CoordinatorFlag = cli.StringFlag{
+		Name:     "coordinator",
+		Usage:    "coordinator address",
+		DefValue: "",
+	}
+	FollowersFlag = cli.StringFlag{
+		Name:     "followers",
+		Usage:    "follower's addresses",
+		DefValue: "",
+	}
+	WhitelistFlag = cli.StringFlag{
+		Name:     "whitelist",
+		Usage:    "allowed hosts",
+		DefValue: "127.0.0.1",
+	}
+	CommitTypeFlag = cli.StringFlag{
+		Name:     "committype",
+		Usage:    "two-phase or three-phase commit mode",
+		DefValue: "two-phase",
+	}
+	TimeoutFlag = cli.IntFlag{
+		Name:     "timeout",
+		Usage:    "ms, timeout after which the message is considered unacknowledged (only for three-phase mode, because two-phase is blocking by design)",
+		DefValue: 1000,
+	}
+)
+// 处理所有cmd输入的参数，存到config.twopcConfig
+func applyTwopcFlags(cmd *cobra.Command, config *harmonyConfig){
+	if cli.IsFlagChanged(cmd, RoleFlag) {
+		config.TwoPC.Role = cli.GetStringFlagValue(cmd, RoleFlag)
+	}
+
+	if cli.IsFlagChanged(cmd, NodeaddrFlag) {
+		config.TwoPC.Nodeaddr = cli.GetStringFlagValue(cmd, NodeaddrFlag)
+	}
+
+	if cli.IsFlagChanged(cmd, CoordinatorFlag) {
+		config.TwoPC.Coordinator = cli.GetStringFlagValue(cmd, CoordinatorFlag)
+	}
+
+	// 处理follower参数
+	if cli.IsFlagChanged(cmd, FollowersFlag) {
+		followers := cli.GetStringFlagValue(cmd, FollowersFlag)
+		shardArray := strings.Split(followers, ",")
+		followersArray := make(map[uint32][]string)
+		if cli.GetStringFlagValue(cmd, RoleFlag) == "coordinator"{
+			for _, item := range shardArray{
+				follower := strings.SplitN(item, "+", 2)
+				intNum, _ := strconv.Atoi(follower[0])
+				followersArray[uint32(intNum)]=append(followersArray[uint32(intNum)], follower[1])
+			}
+		} else { // follower节点也要添加自己
+			follower := strings.SplitN(cli.GetStringFlagValue(cmd, NodeaddrFlag), "+", 2)
+			intNum, _ := strconv.Atoi(follower[0])
+			followersArray[uint32(intNum)]=append(followersArray[uint32(intNum)], follower[1])
+		}
+		//fmt.Println(followersArray)
+		config.TwoPC.Followers = followersArray
+	}
+
+	// Whitelist
+	if cli.IsFlagChanged(cmd, WhitelistFlag) {
+		whitelist := cli.GetStringFlagValue(cmd, WhitelistFlag)
+		whitelistArray := strings.Split(whitelist, ",")
+		config.TwoPC.Whitelist = whitelistArray
+	}
+
+	if cli.IsFlagChanged(cmd, CommitTypeFlag) {
+		config.TwoPC.CommitType = cli.GetStringFlagValue(cmd, CommitTypeFlag)
+	}
+
+	if cli.IsFlagChanged(cmd, TimeoutFlag) {
+		config.TwoPC.Timeout = cli.GetIntFlagValue(cmd, TimeoutFlag)
+	}
+}
+// END
+
 
 func applyGeneralFlags(cmd *cobra.Command, config *harmonyConfig) {
 	if cli.IsFlagChanged(cmd, nodeTypeFlag) {

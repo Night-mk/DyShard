@@ -1,0 +1,109 @@
+/**
+ * @Author Night-mk
+ * @Description //TODO
+ * @Date 8/2/21$ 7:13 PM$
+ **/
+syntax = "proto3";
+package commit;
+option go_package = "./";
+
+// 定义grpc service
+service CommitService {
+  rpc ProposeTwoPhase(ProposeRequest) returns (ProposeResponse);
+  rpc CommitTwoPhase(CommitRequest) returns (Response);
+  rpc StateTransfer(TransferRequest) returns (Response);
+  rpc Get(Msg) returns (Value);
+}
+
+// 定义原子消息种类
+//enum MessageType {
+//  STATE_TRANSFER = 0;
+//  PROPOSE_REQUEST = 1;
+//  COMMIT_REQUEST = 2;
+//}
+
+// 定义协议种类
+enum CommitType {
+  TWO_PHASE_COMMIT = 0;
+  THREE_PHASE_COMMIT = 1;
+}
+// 定义Acknowledge character确认字符种类
+enum AckType {
+  ACK = 0;
+  NACK = 1;
+}
+// 定义跨分片消息的follower种类
+enum FollowerType {
+  SOURCE = 0;
+  TARGET = 1;
+}
+// 定义通用消息格式，使用这个格式可以扩展消息类型
+// 只需要在MessageType中定义，但是在顶层都是使用Message这一个类型
+//message Message{
+//  MessageType type = 1;
+//  oneof request{
+//      TransferRequest transfer = 2;
+//      ProposeRequest propose = 3;
+//      CommitRequest commit = 4;
+//  }
+//}
+// 定义状态迁移请求（支持单事务多状态转移 single-trans->multiple-state）
+// MsgPayload是rlp编码后的数据，原数据形式：
+/**
+  MsgPayload = [
+    ...
+  ]
+ */
+message TransferRequest {
+  uint32 Source = 1;
+  uint32 Target = 2;
+  bytes MsgPayload = 3;
+  uint64 Index = 4;
+}
+
+// 定义2PC, 3PC的request, response消息
+message ProposeRequest {
+  CommitType CommitType = 1;
+  uint32 Source = 2;
+  uint32 Target = 3;
+  bytes MsgPayload = 4;  // 这里其实就是address的byte形式
+  uint64 Index = 5;
+}
+
+// commit请求需要加入state
+message CommitRequest {
+  uint32 Source = 1;
+  uint32 Target = 2;
+  uint64 Index = 3;
+  bytes Address = 4; // 增加address的byte形式
+  bytes MsgPayload = 5; // 携带state, 暂定为state的rlp
+  bool IsRollback = 6;
+}
+
+// 这里propose response需要携带state
+message ProposeResponse{
+  AckType acktype = 1;
+  uint64 Index = 2;
+  FollowerType ftype = 3;
+  bytes Address = 4; // 增加address的byte形式
+  bytes MsgPayload = 5; // 携带state, 暂定为balance的rlp
+}
+
+message Response {
+  AckType acktype = 1;
+  uint64 index = 2;
+  FollowerType ftype = 3;
+}
+
+// 根据address获取当前状态数据(key=address, value=state)
+message Msg {
+  string key = 1;
+}
+
+message Value {
+  bytes value = 1;
+}
+// 根据当前height生成事务编号index
+message Info {
+  uint64 height = 1;
+}

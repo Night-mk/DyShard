@@ -92,6 +92,7 @@ EOF
 
 function build_only
 {
+   echo "=====execute build_only====="
    if [[ "$STATIC" == "true" && "$GOOS" == "darwin" ]]; then
       echo "static build only supported on Linux platform"
       exit 2
@@ -106,6 +107,7 @@ function build_only
    set_gcflags
    set -e
 
+   # 循环调用所有的SRC
    for bin in "${!SRC[@]}"; do
       if [[ -z "$build" || "$bin" == "$build" ]]; then
          rm -f $BINDIR/$bin
@@ -116,6 +118,11 @@ function build_only
             if [ "$STATIC" == "true" ]; then
                env GOOS=$GOOS GOARCH=$GOARCH go build $VERBOSE -gcflags="${GO_GCFLAGS}" -ldflags="-X main.version=v${VERSION} -X main.commit=${COMMIT} -X main.builtAt=${BUILTAT} -X main.builtBy=${BUILTBY}  -w -extldflags \"-static -lm\"" -o $BINDIR/$bin $RACE $TRACEPTR ${SRC[$bin]}
             else
+               ## run this one
+               #echo "run static false"
+               # echo $BINDIR/$bin $RACE $TRACEPTR ${SRC[$bin]}
+               ## 使用go build 编译文件 ./cmd/bootnode 输出到 bin/bootnode； 编译./cmd/harmony输出到 bin/harmony
+               echo GOOS=$GOOS GOARCH=$GOARCH go build $VERBOSE -gcflags="${GO_GCFLAGS}" -ldflags="-X main.version=v${VERSION} -X main.commit=${COMMIT} -X main.builtAt=${BUILTAT} -X main.builtBy=${BUILTBY}" -o $BINDIR/$bin $RACE $TRACEPTR ${SRC[$bin]}
                env GOOS=$GOOS GOARCH=$GOARCH go build $VERBOSE -gcflags="${GO_GCFLAGS}" -ldflags="-X main.version=v${VERSION} -X main.commit=${COMMIT} -X main.builtAt=${BUILTAT} -X main.builtBy=${BUILTBY}" -o $BINDIR/$bin $RACE $TRACEPTR ${SRC[$bin]}
             fi
          fi
@@ -135,6 +142,7 @@ function build_only
          fi
       fi
    done
+   echo "build finish"
 
    pushd $BINDIR
    if [ "$STATIC" == "true" ]; then
@@ -159,6 +167,7 @@ function build_only
 
 function set_gcflags
 {
+  echo "=====execute set_gcflags====="
    if [[ ! -z "$RACE" ]]; then
       if [ "$DEBUG" == "true" ]; then
          GO_GCFLAGS="all=-N -l"
@@ -174,6 +183,7 @@ function set_gcflags
 
 function upload
 {
+  echo "=====execute upload====="
    AWSCLI=aws
 
    if [ -n "$PROFILE" ]; then
@@ -204,6 +214,7 @@ function upload
 
 function release
 {
+  echo "=====execute release====="
    AWSCLI=aws
 
    if [ -n "$PROFILE" ]; then
@@ -268,7 +279,7 @@ while getopts "hp:a:o:b:f:rtvsdS" option; do
       v) VERBOSE='-v -x' ;;
       d) DEBUG=true ;;
       s) STATIC=true ;;
-      S) STATIC=false ;;
+      S) STATIC=false ;; ## -S 表示STATIC变量是false, 所有逻辑都走else
    esac
 done
 

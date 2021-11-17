@@ -17,10 +17,13 @@ var LocalnetSchedule localnetSchedule
 type localnetSchedule struct{}
 
 const (
-	localnetV1Epoch = 1
+	//localnetV1Epoch = 1
+	localnetV1Epoch = 0 // 修改V1
 
-	localnetEpochBlock1      = 10
-	localnetBlocksPerEpoch   = 5
+	//localnetEpochBlock1      = 10
+	//localnetBlocksPerEpoch   = 5
+	localnetEpochBlock1 = 16384 // 定义每个epoch的最后区块
+	localnetBlocksPerEpoch   = 16384 // 修改在v1的区块数量
 	localnetBlocksPerEpochV2 = 10
 
 	localnetVdfDifficulty = 5000 // This takes about 10s to finish the vdf
@@ -33,13 +36,16 @@ func (ls localnetSchedule) InstanceForEpoch(epoch *big.Int) Instance {
 	case params.LocalnetChainConfig.IsTwoSeconds(epoch):
 		return localnetV3
 	case params.LocalnetChainConfig.IsStaking(epoch):
+		fmt.Println("=======LocalnetChainConfig V2=======")
 		return localnetV2
-	case epoch.Cmp(big.NewInt(localnetV1Epoch)) >= 0:
+	case epoch.Cmp(big.NewInt(localnetV1Epoch)) >= 0: // 如果想要默认支持V1就修改这个规则，规避default
+		//fmt.Println("=======LocalnetChainConfig V1=======")
 		return localnetV1
-	default: // genesis
+	default: // genesis 初始化最开始选择这个
 		return localnetV0
 	}
 }
+
 
 func (ls localnetSchedule) BlocksPerEpochOld() uint64 {
 	return localnetBlocksPerEpoch
@@ -137,14 +143,29 @@ func (ls localnetSchedule) IsSkippedEpoch(shardID uint32, epoch *big.Int) bool {
 	return false
 }
 
-var (
+var (// 性能问题会不会是每次都在resharding？
+	//localnetReshardingEpoch = []*big.Int{
+	//	big.NewInt(0), big.NewInt(localnetV1Epoch), params.LocalnetChainConfig.StakingEpoch, params.LocalnetChainConfig.TwoSecondsEpoch,
+	//}
 	localnetReshardingEpoch = []*big.Int{
-		big.NewInt(0), big.NewInt(localnetV1Epoch), params.LocalnetChainConfig.StakingEpoch, params.LocalnetChainConfig.TwoSecondsEpoch,
+		big.NewInt(0), big.NewInt(1), params.LocalnetChainConfig.StakingEpoch, params.LocalnetChainConfig.TwoSecondsEpoch,
 	}
 	// Number of shards, how many slots on each , how many slots owned by Harmony
-	localnetV0   = MustNewInstance(2, 7, 5, numeric.OneDec(), genesis.LocalHarmonyAccounts, genesis.LocalFnAccounts, localnetReshardingEpoch, LocalnetSchedule.BlocksPerEpochOld())
-	localnetV1   = MustNewInstance(2, 8, 5, numeric.OneDec(), genesis.LocalHarmonyAccountsV1, genesis.LocalFnAccountsV1, localnetReshardingEpoch, LocalnetSchedule.BlocksPerEpochOld())
+	//localnetV0   = MustNewInstance(2, 7, 5, numeric.OneDec(), genesis.LocalHarmonyAccounts, genesis.LocalFnAccounts, localnetReshardingEpoch, LocalnetSchedule.BlocksPerEpochOld())
+	localnetV0   = MustNewInstance(2, 4, 3, numeric.OneDec(), genesis.LocalHarmonyAccounts, genesis.LocalFnAccounts, localnetReshardingEpoch, LocalnetSchedule.BlocksPerEpochOld())
+	//localnetV1   = MustNewInstance(2, 8, 5, numeric.OneDec(), genesis.LocalHarmonyAccountsV1, genesis.LocalFnAccountsV1, localnetReshardingEpoch, LocalnetSchedule.BlocksPerEpochOld())
 	localnetV2   = MustNewInstance(2, 9, 6, numeric.MustNewDecFromStr("0.68"), genesis.LocalHarmonyAccountsV2, genesis.LocalFnAccountsV2, localnetReshardingEpoch, LocalnetSchedule.BlocksPerEpochOld())
 	localnetV3   = MustNewInstance(2, 9, 6, numeric.MustNewDecFromStr("0.68"), genesis.LocalHarmonyAccountsV2, genesis.LocalFnAccountsV2, localnetReshardingEpoch, LocalnetSchedule.BlocksPerEpoch())
 	localnetV3_1 = MustNewInstance(2, 9, 6, numeric.MustNewDecFromStr("0.68"), genesis.LocalHarmonyAccountsV2, genesis.LocalFnAccountsV2, localnetReshardingEpoch, LocalnetSchedule.BlocksPerEpoch())
+
+
+	// dynamic sharding 测试使用
+	// shardNum=2, nodeNum=4
+	//localnetV1   = MustNewInstance(2, 4, 3, numeric.OneDec(), genesis.LocalHarmonyAccounts, genesis.LocalFnAccounts, localnetReshardingEpoch, LocalnetSchedule.BlocksPerEpochOld())
+	// shardNum=2, nodeNum=8
+	//localnetV1   = MustNewInstance(2, 8, 6, numeric.OneDec(), genesis.LocalHarmonyAccounts, genesis.LocalFnAccounts, localnetReshardingEpoch, LocalnetSchedule.BlocksPerEpochOld())
+	// shardNum=2, nodeNum=16
+	//localnetV1   = MustNewInstance(2, 16, 11, numeric.OneDec(), genesis.LocalHarmonyAccounts, genesis.LocalFnAccounts, localnetReshardingEpoch, LocalnetSchedule.BlocksPerEpochOld())
+	// shardNum=2, nodeNum=32
+	localnetV1   = MustNewInstance(2, 32, 22, numeric.OneDec(), genesis.LocalHarmonyAccounts, genesis.LocalFnAccounts, localnetReshardingEpoch, LocalnetSchedule.BlocksPerEpochOld())
 )

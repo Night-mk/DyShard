@@ -94,6 +94,9 @@ type ConfigType struct {
 	WebHooks         struct {
 		Hooks *webhooks.Hooks
 	}
+
+	// dynamic sharding
+	TwoPcServer   TwoPcConfig
 }
 
 // RPCServerConfig is the config for rpc listen addresses
@@ -119,6 +122,18 @@ type RosettaServerConfig struct {
 	HTTPPort    int
 }
 
+// dynamic sharding
+type TwoPcConfig struct {
+	Role        string
+	Nodeaddr    string
+	Coordinator string
+	Followers   map[uint32][]string
+	Whitelist   []string
+	CommitType  string
+	Timeout     int
+}
+
+
 // configs is a list of node configuration.
 // It has at least one configuration.
 // The first one is the default, global node configuration
@@ -126,6 +141,7 @@ var shardConfigs []ConfigType
 var defaultConfig ConfigType
 var onceForConfigs sync.Once
 
+// 只执行一次的方法，初始化shardconfig
 func ensureShardConfigs() {
 	onceForConfigs.Do(func() {
 		shardConfigs = make([]ConfigType, MaxShards)

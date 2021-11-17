@@ -1,7 +1,10 @@
 package node
 
 import (
+	"fmt"
 	"github.com/ethereum/go-ethereum/rpc"
+	atomic_server "github.com/harmony-one/harmony/atomic"
+	"github.com/harmony-one/harmony/atomic/hooks"
 	"github.com/harmony-one/harmony/core/types"
 	"github.com/harmony-one/harmony/hmy"
 	"github.com/harmony-one/harmony/rosetta"
@@ -91,6 +94,38 @@ func (node *Node) StartRosetta() error {
 func (node *Node) StopRosetta() error {
 	return rosetta.StopServers()
 }
+
+/*
+	dynamic sharding
+ */
+// 在node中启动2PC
+func (node *Node) StartTwoPC() error{
+	// 要从全局的harmonyConfig中拿到配置
+	//conf := config.GetConfig()
+	hooks, err := hooks.GetHookF()
+	if err != nil {
+		panic(err)
+		return err
+	}
+	// 从node.NodeConfig.TwoPcServer拿到配置
+	node.twopcServer, err = atomic_server.NewCommitServerShard(node.NodeConfig.TwoPcServer, node.CommitPool, hooks...)
+	if err != nil {
+		panic(err)
+		return err
+	}
+
+	// Run函数启动一个non-blocking GRPC server
+	//node.twopcServer.Run(atomic_server.WhiteListCheckerShard)
+	node.twopcServer.RunHttp()
+	fmt.Printf("Started 2PC server at: %v\n", node.twopcServer.Addr)
+	return nil
+}
+// stop 2PC
+func (node *Node) StopTwoPC(){
+	//node.twopcServer.Stop()
+	node.twopcServer.StopHttp()
+}
+// END
 
 // APIs return the collection of local RPC services.
 // NOTE, some of these services probably need to be moved to somewhere else.

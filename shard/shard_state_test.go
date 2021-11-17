@@ -2,6 +2,7 @@ package shard
 
 import (
 	"bytes"
+	"github.com/harmony-one/harmony/shard/mapping/range"
 	"math/big"
 	"testing"
 
@@ -73,7 +74,16 @@ func TestHash(t *testing.T) {
 			{common.Address{0x66}, blsPubKey6, nil},
 		},
 	}
-	shardState1 := State{nil, []Committee{com1, com2}}
+	range1 := _range.RangeMapContent{
+		ShardID: 2,
+		Prefix: "00",
+	}
+	range2 := _range.RangeMapContent{
+		ShardID: 22,
+		Prefix:  "01",
+	}
+	// 修改测试使用的state
+	shardState1 := State{nil, []Committee{com1, com2}, []_range.RangeMapContent{range1, range2}}
 	h1 := shardState1.Hash()
 
 	com3 := Committee{
@@ -92,8 +102,16 @@ func TestHash(t *testing.T) {
 			{common.Address{0x11}, blsPubKey1, nil},
 		},
 	}
+	range3 := _range.RangeMapContent{
+		ShardID: 2,
+		Prefix: "00",
+	}
+	range4 := _range.RangeMapContent{
+		ShardID: 22,
+		Prefix:  "01",
+	}
 
-	shardState2 := State{nil, []Committee{com3, com4}}
+	shardState2 := State{nil, []Committee{com3, com4}, []_range.RangeMapContent{range4, range3}}
 	h2 := shardState2.Hash()
 
 	if !bytes.Equal(h1[:], h2[:]) {
@@ -119,7 +137,7 @@ func TestCompatibilityOldShardStateIntoNew(t *testing.T) {
 			SlotLegacy{junkA, blsPubKey6},
 		}},
 	}
-
+	// 修改state测试
 	postStakingState := State{nil, []Committee{
 		Committee{ShardID: 0, Slots: SlotList{
 			Slot{junkA, blsPubKey1, nil},
@@ -134,7 +152,17 @@ func TestCompatibilityOldShardStateIntoNew(t *testing.T) {
 			Slot{junkA, blsPubKey4, nil},
 			Slot{junkA, blsPubKey5, &stake2},
 		}},
-	}}
+	}, []_range.RangeMapContent{
+			_range.RangeMapContent{
+				ShardID: 0,
+				Prefix: "00",
+			},
+			_range.RangeMapContent{
+				ShardID: 1,
+				Prefix: "01",
+			},
+		},
+	}
 
 	preStakingStateBytes, _ := rlp.EncodeToBytes(preStakingState)
 	postStakingStateBytes, _ := rlp.EncodeToBytes(postStakingState)
@@ -161,6 +189,78 @@ func TestCompatibilityOldShardStateIntoNew(t *testing.T) {
 
 	if err3 == nil {
 		t.Errorf("Should have caused error %v", err3)
+	}
+
+}
+
+// 测试利用state计算地址的shardID
+func TestCalculateShardID(t *testing.T) {
+	//
+	com1 := Committee{
+		ShardID: 0,
+		Slots: []Slot{
+			{common.Address{0x12}, blsPubKey11, nil},
+		},
+	}
+	com2 := Committee{
+		ShardID: 1,
+		Slots: []Slot{
+			{common.Address{0x44}, blsPubKey4, nil},
+		},
+	}
+	com3 := Committee{
+		ShardID: 2,
+		Slots: []Slot{
+			{common.Address{0x12}, blsPubKey11, nil},
+		},
+	}
+	com4 := Committee{
+		ShardID: 3,
+		Slots: []Slot{
+			{common.Address{0x44}, blsPubKey4, nil},
+		},
+	}
+	com5 := Committee{
+		ShardID: 5,
+		Slots: []Slot{
+			{common.Address{0x44}, blsPubKey4, nil},
+		},
+	}
+	range1 := _range.RangeMapContent{
+		ShardID: 0,
+		Prefix: "00",
+	}
+	range2 := _range.RangeMapContent{
+		ShardID: 1,
+		Prefix:  "10",
+	}
+	range3 := _range.RangeMapContent{
+		ShardID: 2,
+		Prefix:  "01",
+	}
+	range4 := _range.RangeMapContent{
+		ShardID: 3,
+		Prefix:  "110",
+	}
+	range5 := _range.RangeMapContent{
+		ShardID: 4,
+		Prefix:  "111",
+	}
+	addressList := [] string{ // 16进制类型
+		"0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
+		"0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359",
+		"0xdbF03B407c01E7cD3CBea99509d93f8DDDC8C6FB",
+	}
+	shardState := State{
+		nil,
+		[]Committee{com1, com2, com3, com4, com5},
+		[]_range.RangeMapContent{range1, range2, range3, range4, range5},
+	}
+
+	// 对所有的address求shardID
+	for _, item := range addressList{
+		sharId := CalculateShardIDByRangeMap(common.HexToAddress(item), shardState)
+		t.Log("address: ", item, "shardID: ", sharId)
 	}
 
 }

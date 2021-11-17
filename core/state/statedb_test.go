@@ -681,3 +681,11 @@ func TestDeleteCreateRevert(t *testing.T) {
 		t.Fatalf("self-destructed contract came alive")
 	}
 }
+
+
+/**
+	dynamic sharding修改
+ */
+func TestLog(t *testing.T){
+	t.Log("test log dynamic sharding")
+}

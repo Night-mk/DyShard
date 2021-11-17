@@ -272,3 +272,34 @@ func ReadCXReceipt(db DatabaseReader, hash common.Hash) (*types.CXReceipt, commo
 	}
 	return cx, blockHash, blockNumber, cxIndex
 }
+
+/**
+	dynamic sharding
+ */
+// WriteBlockSTtxLookUpEntries writes all look up entries of block's transactions
+// 对区块中的所有stateTransfer交易，写查找入口
+func WriteBlockSTtxLookUpEntries(db DatabaseWriter, block *types.Block) error {
+	for i, tx := range block.StateTransferTransactions(){
+		entry := SttxLookupEntry{
+			BlockHash: block.Hash(),
+			BlockIndex: block.NumberU64(),
+			Index: uint64(i),
+		}
+		val, err := rlp.EncodeToBytes(entry)
+		if err != nil {
+			return err
+		}
+		key := stTxLookupKey(tx.Hash())
+		if err := db.Put(key, val); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// DeleteCxLookupEntry removes all transaction data associated with a hash.
+func DeleteSTtxLookupEntry(db DatabaseDeleter, hash common.Hash) error {
+	return db.Delete(stTxLookupKey(hash))
+}
+
+// END

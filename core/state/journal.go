@@ -115,6 +115,11 @@ type (
 		account            *common.Address
 		prevcode, prevhash []byte
 	}
+	/*dynamic sharding*/
+	freezeChange struct {
+		account *common.Address
+		prev    bool
+	}
 
 	// Changes to other state values.
 	refundChange struct {
@@ -190,6 +195,15 @@ func (ch codeChange) revert(s *DB) {
 }
 
 func (ch codeChange) dirtied() *common.Address {
+	return ch.account
+}
+
+// freeze状态实现revert接口方法，返回记录在journal中的上一步执行时的freeze值
+func (ch freezeChange) revert(s *DB){
+	s.getStateObject(*ch.account).setFreezeState(ch.prev)
+}
+
+func (ch freezeChange) dirtied() *common.Address{
 	return ch.account
 }
 

@@ -72,15 +72,32 @@ var (
 	preimageCounter             = metrics.NewRegisteredCounter("db/preimage/total", nil)
 	preimageHitCounter          = metrics.NewRegisteredCounter("db/preimage/hits", nil)
 	currentRewardGivenOutPrefix = []byte("blk-rwd-")
+
+	/**
+		dynamic sharding
+	 */
+	// 新增stateTransferTx的查找前缀
+	stTxLookupPrefix = []byte("sttx") // stTxLookupPrefix + hash -> transaction/receipt lookup metadata
 )
 
 // TxLookupEntry is a positional metadata to help looking up the data content of
 // a transaction or receipt given only its hash.
+// TxLookupEntry是一种位置元数据，帮助在指定hash时，查找交易/收据的内容
 type TxLookupEntry struct {
 	BlockHash  common.Hash
 	BlockIndex uint64
 	Index      uint64
 }
+
+// dynamic sharding
+// 为stateTransferTx构建一个新的存储位置
+type SttxLookupEntry struct {
+	BlockHash  common.Hash
+	BlockIndex uint64
+	Index      uint64
+}
+
+// END
 
 // encodeBlockNumber encodes a block number as big endian uint64
 func encodeBlockNumber(number uint64) []byte {
@@ -221,4 +238,13 @@ func blockRewardAccumKey(number uint64) []byte {
 
 func blockCommitSigKey(number uint64) []byte {
 	return append(blockCommitSigPrefix, encodeBlockNumber(number)...)
+}
+
+/**
+	dynamic sharding
+*/
+// 生成stateTransfer交易的查找key
+// stTxLookupKey = sttxLookupPrefix + hash
+func stTxLookupKey(hash common.Hash) []byte {
+	return append(stTxLookupPrefix, hash.Bytes()...)
 }

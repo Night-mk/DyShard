@@ -68,6 +68,7 @@ func (consensus *Consensus) didReachPrepareQuorum() error {
 			return err
 		}
 	}
+	consensus.getLogger().Info().Msg("SendWithRetry: didReachPrepareQuorum")
 	if err := consensus.msgSender.SendWithRetry(
 		consensus.blockNum,
 		msg_pb.MessageType_PREPARED, []nodeconfig.GroupID{

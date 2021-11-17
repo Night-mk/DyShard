@@ -88,6 +88,7 @@ func (sc *CollectionImpl) ShardChain(shardID uint32) (*core.BlockChain, error) {
 			Uint32("shardID", shardID).
 			Msg("initializing a new chain database")
 		if err := sc.dbInit.InitChainDB(db, shardID); err != nil {
+			// 可能这里报错
 			return nil, errors.Wrapf(err, "cannot initialize a new chain database")
 		}
 	}

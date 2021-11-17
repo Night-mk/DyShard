@@ -26,6 +26,7 @@ import (
 )
 
 // keystoreWallet implements the accounts.Wallet interface for the original
+// 实现了accounts.Wallet的接口
 // keystore.
 type keystoreWallet struct {
 	account  accounts.Account // Single account contained in this wallet

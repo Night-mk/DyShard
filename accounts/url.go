@@ -24,6 +24,7 @@ import (
 )
 
 // URL represents the canonical identification URL of a wallet or account.
+// URL 表示钱包或帐户的规范标识 URL
 //
 // It is a simplified version of url.URL, with the important limitations (which
 // are considered features here) that it contains value-copyable components only,

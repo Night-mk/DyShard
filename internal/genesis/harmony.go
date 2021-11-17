@@ -8,7 +8,7 @@ var HarmonyAccounts = []DeployAccount{
 	{Index: " 3 ", Address: "one1aywupeg53g38z2y009mzuwdw5u9lwsy2e5yetw", BLSPublicKey: "7ca453b4916f08e7316cb9e0a80e03336ee70d364dccbab09496590da8807d01cef2cd07187a7d2c946d500936449a98"},
 	{Index: " 4 ", Address: "one1jyvcqu4k0rszgf3r2a02tm89dzd68arw5lz9vl", BLSPublicKey: "50b20b4eb89041aa4715e87e4aa6430e674658959d8be657d43e4d3d4c35d7507d6a40aec5188218dcbb5460e354fd12"},
 	{Index: " 5 ", Address: "one1ud4zg04zmvw9jc6yw9dpes4vpyqcpuh4wvn9sh", BLSPublicKey: "56c8ebcce3dcacd9fb4209805b141c52efa79842de0098821b4010e2998b7441690245476874878ef07d8fbed32aa917"},
-	{Index: " 6 ", Address: "one1msk55usx4hf7ph7uvjwa0ese3qzkytkpddk4uh", BLSPublicKey: "62e389f040a6dd855e9676ab463aa5f04c6ea7766308e8f01c5ff9be43b83e980c734c48a7023a11a9b23a847bd0a889"},
+	{Index: " 6 ", Address: "one1msk55usx4hf7ph7uvjwa0ese3qzkytkpddk4uh", BLSPublicKey: "62e389f040a6dd855e9676ab463aa5f04c6ea7one1pf75h0t4am90z8uv3y0dgunfqp4lj8wr3t5rsp766308e8f01c5ff9be43b83e980c734c48a7023a11a9b23a847bd0a889"},
 	{Index: " 7 ", Address: "one1rwgsagmzt7pn6v3p9sqkss4whvjr8humsw8nxl", BLSPublicKey: "cb18edb21369848307299d5903e70c4a505a5efd55e056e6ff9d8ee45ad921da84ca808c544da8126a8ae3951ef9ad0d"},
 	{Index: " 8 ", Address: "one1nn2c86kwaq4nk8lda50fnepepqr9y73kd9w2z3", BLSPublicKey: "5ecf182ef0cfe449470d900dbe4ce312d534c882765e639c59525f2710d9f96a04abd871e4f0afadc1bd4b07a54ea106"},
 	{Index: " 9 ", Address: "one1ff0e7furnnhhnkwy3x7dz7uex5v2tn9p25hycw", BLSPublicKey: "5438b795c8652f901b948e886085d6386608875c5e8c1474813c82a6079df3bd8b261f25241c3ed825675f58a1f79491"},

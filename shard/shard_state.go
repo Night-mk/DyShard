@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"github.com/harmony-one/harmony/shard/mapping/range"
 	"math/big"
 	"sort"
 
@@ -25,9 +27,12 @@ var (
 )
 
 // State is the collection of all committees
+// 在header中被引用，实际数据存在哪个db？和block的数据存在一起？
 type State struct {
 	Epoch  *big.Int    `json:"epoch"`
 	Shards []Committee `json:"shards"`
+	// 新增prefix参数, 作为address的映射前缀, address可以根据prefix获取对应的shardID
+	RangeMap []_range.RangeMapContent
 }
 
 // Slot represents node id (BLS address)
@@ -54,6 +59,35 @@ func (l SlotList) String() string {
 	}
 	s, _ := json.Marshal(blsKeys)
 	return string(s)
+}
+
+/**
+	dynamic sharding
+ */
+// 根据address获取shardID
+func CalculateShardIDByRangeMap(addr common.Address, shardState State) (shardID uint32){
+	shardID = BeaconChainShardID // 初始化为beacon链的shardID，如果计算错误就返回该ID
+	rangeMap := shardState.RangeMap
+	// 为了效率，目前只取address的前2个byte，因为也没那么多shard
+	addrBinstr := BytesToBinaryString(addr.Bytes()[:2])
+	fmt.Println("addr_bin: ", addrBinstr)
+	for _, item := range rangeMap{ // 遍历rangeMap
+		prefixLen := len(item.Prefix)
+		if addrBinstr[:prefixLen] == item.Prefix{
+			shardID = item.ShardID
+			break
+		}
+	}
+	return shardID
+}
+
+// 将byte数组转换为二进制字符串
+func BytesToBinaryString(bs []byte) string {
+	buf := bytes.NewBuffer([]byte{})
+	for _, v := range bs {
+		buf.WriteString(fmt.Sprintf("%08b", v))
+	}
+	return buf.String()
 }
 
 /* Legacy
@@ -250,6 +284,7 @@ func (ss *State) MarshalJSON() ([]byte, error) {
 // or nil if the given shard is not found.
 func (ss *State) FindCommitteeByID(shardID uint32) (*Committee, error) {
 	if ss == nil {
+		fmt.Println("shard_state.go find committee error")
 		return nil, ErrShardIDNotInSuperCommittee
 	}
 	for committee := range ss.Shards {

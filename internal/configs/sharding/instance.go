@@ -151,8 +151,12 @@ func (sc instance) FnAccounts() []genesis.DeployAccount {
 // or not in the bootstrapping process.
 func (sc instance) FindAccount(blsPubKey string) (bool, *genesis.DeployAccount) {
 	for i, item := range sc.hmyAccounts {
+		// instance表示shardConfig的一个实例
+		// i表示hmyAccount的index，为什么用index计算分片id？
 		if item.BLSPublicKey == blsPubKey {
+			// 定义计算shardID的方法？
 			item.ShardID = uint32(i) % sc.numShards
+			// 修改shardID映射
 			return uint32(i) < sc.numShards, &item
 		}
 	}

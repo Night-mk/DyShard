@@ -74,6 +74,8 @@ type Object struct {
 	data     Account
 	db       *DB
 
+	// freeze 参数控制state是否可以修改
+	freeze bool
 	// DB error.
 	// State objects are used by the consensus core and VM which are
 	// unable to deal with database-level errors. Any error that occurs
@@ -131,6 +133,7 @@ func newObject(db *DB, address common.Address, data Account) *Object {
 		originStorage:  make(Storage),
 		pendingStorage: make(Storage),
 		dirtyStorage:   make(Storage),
+		freeze:         false, // 初始化freeze都是false，表示可以修改
 	}
 }
 
@@ -243,6 +246,31 @@ func (s *Object) SetState(db Database, key, value common.Hash) {
 	})
 	s.setState(key, value)
 }
+
+/**
+	dynamic sharding
+ */
+// 设置object中的freeze参数的状态
+func (s *Object) SetFreezeState(db Database, isFreeze bool){
+	// 1. 在journal中记录历史
+	s.db.journal.append(freezeChange{
+		account: &s.address,
+		prev: s.freeze,
+	})
+	// 2. 修改freeze state为新的值
+	s.setFreezeState(isFreeze)
+}
+
+func (s *Object) setFreezeState(isFreeze bool) {
+	s.freeze = isFreeze
+}
+
+// 返回freeze的状态
+func (s *Object) FreezeState() bool{
+	return s.freeze
+}
+
+
 
 // SetStorage replaces the entire state storage with the given one.
 //
@@ -364,10 +392,12 @@ func (s *Object) SubBalance(amount *big.Int) {
 
 // SetBalance ...
 func (s *Object) SetBalance(amount *big.Int) {
+	// 1. 先在journal中添加balance的记录
 	s.db.journal.append(balanceChange{
 		account: &s.address,
 		prev:    new(big.Int).Set(s.data.Balance),
 	})
+	// 2. 再设置新balance
 	s.setBalance(amount)
 }
 

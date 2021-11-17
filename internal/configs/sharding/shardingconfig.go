@@ -75,11 +75,12 @@ type Instance interface {
 }
 
 // genShardingStructure return sharding structure, given shard number and its patterns.
+// 主要是返回网络的pattern？ 传入的httpPattern的例子（mainnet）:MainNetHTTPPattern = "https://api.s%d.t.hmny.io"
 func genShardingStructure(shardNum, shardID int, httpPattern, wsPattern string) []map[string]interface{} {
 	res := []map[string]interface{}{}
 	for i := 0; i < shardNum; i++ {
 		res = append(res, map[string]interface{}{
-			"current": int(shardID) == i,
+			"current": int(shardID) == i, // 判断shardID和哪个shardNum相同
 			"shardID": i,
 			"http":    fmt.Sprintf(httpPattern, i),
 			"ws":      fmt.Sprintf(wsPattern, i),

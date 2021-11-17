@@ -91,3 +91,6 @@ explorer_storage_*
 
 # local blskeys for testing
 .hmy/blskeys
+
+# test part
+test/

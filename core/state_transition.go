@@ -252,6 +252,7 @@ func (st *StateTransition) preCheck() error {
 // TransitionDb will transition the state by applying the current message and
 // returning the result including the used gas. It returns an error if failed.
 // An error indicates a consensus issue.
+// 初始化交易工作环境，执行交易
 func (st *StateTransition) TransitionDb() (ExecutionResult, error) {
 	if err := st.preCheck(); err != nil {
 		return ExecutionResult{}, err
@@ -277,7 +278,7 @@ func (st *StateTransition) TransitionDb() (ExecutionResult, error) {
 	// All VM errors are valid except for insufficient balance, therefore returned separately
 	var vmErr error
 
-	if contractCreation {
+	if contractCreation { // 如果to地址为nil，则该交易为创建合约的交易
 		ret, _, st.gas, vmErr = evm.Create(sender, st.data, st.gas, st.value)
 	} else {
 		// Increment the nonce for the next transaction
@@ -299,6 +300,7 @@ func (st *StateTransition) TransitionDb() (ExecutionResult, error) {
 	// Burn Txn Fees after staking epoch
 	if !st.evm.ChainConfig().IsStaking(st.evm.EpochNumber) {
 		txFee := new(big.Int).Mul(new(big.Int).SetUint64(st.gasUsed()), st.gasPrice)
+		// 对coinbase地址单独进行处理，这里转入交易费txFee，但是在哪里处理挖矿收益？
 		st.state.AddBalance(st.evm.Coinbase, txFee)
 	}
 

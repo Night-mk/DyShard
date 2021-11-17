@@ -334,6 +334,7 @@ func (ss *StateSync) CreateSyncConfig(peers []p2p.Peer, isBeacon bool) error {
 				port:   peer.Port,
 				client: client,
 			}
+			//fmt.Println("syncing.go CreateSyncConfig peer: ",peer.IP, peer.Port)
 			ss.syncConfig.AddPeer(peerConfig)
 		}(peer)
 	}
@@ -1024,7 +1025,10 @@ func (ss *StateSync) getMaxPeerHeight(isBeacon bool) uint64 {
 			// utils.Logger().Debug().Bool("isBeacon", isBeacon).Str("peerIP", peerConfig.ip).Str("peerPort", peerConfig.port).Msg("[Sync]getMaxPeerHeight")
 			response, err := peerConfig.client.GetBlockChainHeight()
 			if err != nil {
+				// dynamic sharding
+				// 使用node_syncing.go 中localnet构建的节点同步，会在这里报错
 				utils.Logger().Warn().Err(err).Str("peerIP", peerConfig.ip).Str("peerPort", peerConfig.port).Msg("[Sync]GetBlockChainHeight failed")
+				// 然后会移除这个peerConfig配置
 				ss.syncConfig.RemovePeer(peerConfig)
 				return
 			}

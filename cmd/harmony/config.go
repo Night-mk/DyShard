@@ -37,6 +37,18 @@ type harmonyConfig struct {
 	Legacy     *legacyConfig     `toml:",omitempty"`
 	Prometheus *prometheusConfig `toml:",omitempty"`
 	DNSSync    dnsSync
+	/* dynamic sharding */
+	TwoPC      twopcConfig  // 新增一种对2PC的配置
+}
+
+type twopcConfig struct {
+	Role        string
+	Nodeaddr    string
+	Coordinator string
+	Followers   map[uint32][]string
+	Whitelist   []string
+	CommitType  string
+	Timeout     int
 }
 
 type dnsSync struct {

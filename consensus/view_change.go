@@ -280,6 +280,7 @@ func (consensus *Consensus) startViewChange() {
 			continue
 		}
 		msgToSend := consensus.constructViewChangeMessage(&key)
+		consensus.getLogger().Info().Msg("SendWithRetry: startViewChange")
 		if err := consensus.msgSender.SendWithRetry(
 			consensus.blockNum,
 			msg_pb.MessageType_VIEWCHANGE,
@@ -305,7 +306,7 @@ func (consensus *Consensus) startNewView(viewID uint64, newLeaderPriKey *bls.Pri
 	if msgToSend == nil {
 		return errors.New("failed to construct NewView message")
 	}
-
+	consensus.getLogger().Info().Msg("SendWithRetry: startNewView")
 	if err := consensus.msgSender.SendWithRetry(
 		consensus.blockNum,
 		msg_pb.MessageType_NEWVIEW,

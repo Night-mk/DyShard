@@ -60,6 +60,9 @@ func (h Header) MarshalJSON() ([]byte, error) {
 		ViewID  *big.Int `json:"viewID"`
 		Epoch   *big.Int `json:"epoch"`
 		ShardID uint32   `json:"shardID"`
+		// dynamic sharding
+		LoadMapRoot  common.Hash
+		StateTransferTxHash common.Hash
 	}{
 		h.ParentHash(),
 		common.Hash{},
@@ -80,6 +83,9 @@ func (h Header) MarshalJSON() ([]byte, error) {
 		h.Header.ViewID(),
 		h.Header.Epoch(),
 		h.Header.ShardID(),
+		// dynamic sharding
+		h.LoadMapRoot(),
+		h.StateTransferTxHash(),
 	})
 }
 

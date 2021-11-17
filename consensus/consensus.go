@@ -117,6 +117,7 @@ type Consensus struct {
 	// Have a dedicated reader thread pull from this chan, like in node
 	SlashChan chan slash.Record
 	// How long in second the leader needs to wait to propose a new block.
+	// dynamic sharding 这里可以确定是否2秒完成共识！！
 	BlockPeriod time.Duration
 	// The time due for next block proposal
 	NextBlockDue time.Time

@@ -66,6 +66,11 @@ type headerFields struct {
 	Vrf                 []byte      `json:"vrf"`
 	Vdf                 []byte      `json:"vdf"`
 	ShardState          []byte      `json:"shardState"`
+	/* dynamic sharding */
+	// 添加loadMap root的哈希值
+	LoadMapRoot         common.Hash
+	// 添加stateTransfer交易集合的RLP哈希值（不需要使用trie存储）
+	StateTransferTxHash common.Hash
 }
 
 // ParentHash is the header hash of the parent block.  For the genesis block
@@ -428,4 +433,26 @@ func (h *Header) GetShardState() (shard.State, error) {
 func (h *Header) Copy() blockif.Header {
 	cpy := *h
 	return &cpy
+}
+
+/**
+	dynamic sharding
+*/
+// 只在v1的Header中实现函数
+// LoadMapRoot是loadMap trie的root hash
+func (h *Header) LoadMapRoot() common.Hash {
+	return h.fields.LoadMapRoot
+}
+// SetLoadMapRoot 设置loadMap trie的root hash
+func (h *Header) SetLoadMapRoot(newRoot common.Hash){
+	h.fields.LoadMapRoot = newRoot
+}
+// TxHash 是stateTransferTransaction交易的RLP的hash.
+func (h *Header) StateTransferTxHash() common.Hash{
+	return h.fields.StateTransferTxHash
+}
+
+// SetTxHash 设置stateTransferTransaction交易的RLP的hash field.
+func (h *Header) SetStateTransferTxHash(newTxHash common.Hash){
+	h.fields.StateTransferTxHash = newTxHash
 }

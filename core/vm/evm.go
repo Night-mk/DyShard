@@ -206,18 +206,21 @@ func (evm *EVM) Interpreter() Interpreter {
 // the necessary steps to create accounts and reverses the state in case of an
 // execution error or failed value transfer.
 func (evm *EVM) Call(caller ContractRef, addr common.Address, input []byte, gas uint64, value *big.Int) (ret []byte, leftOverGas uint64, err error) {
+	// 如果不允许递归深度大于0，直接退出
 	if evm.vmConfig.NoRecursion && evm.depth > 0 {
 		return nil, gas, nil
 	}
 
 	// Fail if we're trying to execute above the call depth limit
+	// 如果递归深度大于1024，直接退出
 	if evm.depth > int(params.CallCreateDepth) {
 		return nil, gas, ErrDepth
 	}
-
+	// 获取交易的type
 	txType := evm.Context.TxType
 
 	// Fail if we're trying to transfer more than the available balance
+	// 如果调用地址余额不够，直接退出
 	if !evm.Context.CanTransfer(evm.StateDB, caller.Address(), value) {
 		return nil, gas, ErrInsufficientBalance
 	}
@@ -226,6 +229,7 @@ func (evm *EVM) Call(caller ContractRef, addr common.Address, input []byte, gas 
 		to       = AccountRef(addr)
 		snapshot = evm.StateDB.Snapshot()
 	)
+	// 判断接收地址是否存在state中，不存在则创建一个CreateAccount
 	if !evm.StateDB.Exist(addr) && txType != types.SubtractionOnly {
 		precompiles := PrecompiledContractsHomestead
 		if evm.ChainConfig().IsS3(evm.EpochNumber) {
@@ -248,8 +252,9 @@ func (evm *EVM) Call(caller ContractRef, addr common.Address, input []byte, gas 
 		}
 		evm.StateDB.CreateAccount(addr)
 	}
+	// 执行转账
 	evm.Transfer(evm.StateDB, caller.Address(), to.Address(), value, txType)
-
+	// 如果to的地址是合约，则可以利用该地址获取code的哈希和code内容
 	codeHash := evm.StateDB.GetCodeHash(addr)
 	code := evm.StateDB.GetCode(addr)
 	// If address is a validator address, then it's not a smart contract address
@@ -260,6 +265,7 @@ func (evm *EVM) Call(caller ContractRef, addr common.Address, input []byte, gas 
 	}
 	// Initialise a new contract and set the code that is to be used by the EVM.
 	// The contract is a scoped environment for this execution context only.
+	// 创建一个待执行的合约对象，并执行
 	contract := NewContract(caller, to, value, gas)
 	contract.SetCallCode(&addr, codeHash, code)
 

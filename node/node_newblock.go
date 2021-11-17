@@ -2,6 +2,8 @@ package node
 
 import (
 	"errors"
+	"fmt"
+	atomicState "github.com/harmony-one/harmony/atomic/types"
 	"sort"
 	"strings"
 	"time"
@@ -23,6 +25,8 @@ import (
 const (
 	SleepPeriod           = 20 * time.Millisecond
 	IncomingReceiptsLimit = 6000 // 2000 * (numShards - 1)
+	// 暂定每个区块最多只能处理的迁移交易sttx数量
+	maxProcessSttxNum = 299
 )
 
 // WaitForConsensusReadyV2 listen for the readiness signal from consensus and generate new block for consensus.
@@ -49,6 +53,7 @@ func (node *Node) WaitForConsensusReadyV2(readySignal chan consensus.ProposalTyp
 				return
 			case proposalType := <-readySignal:
 				retryCount := 0
+				// 只有leader能打包区块
 				for node.Consensus != nil && node.Consensus.IsLeader() {
 					time.Sleep(SleepPeriod)
 					utils.Logger().Info().
@@ -65,7 +70,7 @@ func (node *Node) WaitForConsensusReadyV2(readySignal chan consensus.ProposalTyp
 							waitTime = consensus.CommitSigReceiverTimeout
 						}
 						select {
-						case <-time.After(waitTime):
+						case <-time.After(waitTime): // 超时处理
 							if waitTime == 0 {
 								utils.Logger().Info().Msg("[ProposeNewBlock] Sync block proposal, reading commit sigs directly from DB")
 							} else {
@@ -78,15 +83,21 @@ func (node *Node) WaitForConsensusReadyV2(readySignal chan consensus.ProposalTyp
 							} else {
 								newCommitSigsChan <- sigs
 							}
-						case commitSigs := <-commitSigsChan:
+						case commitSigs := <-commitSigsChan: // 接收到签名信号的处理
 							utils.Logger().Info().Msg("[ProposeNewBlock] received commit sigs asynchronously")
 							if len(commitSigs) > bls.BLSSignatureSizeInBytes {
+								utils.Logger().Info().
+									Int("receiveNumber", len(commitSigs)).
+									Msg("[ProposeNewBlock] received commit sigs asynchronously enough")
 								newCommitSigsChan <- commitSigs
 							}
 						}
 					}()
 					newBlock, err := node.ProposeNewBlock(newCommitSigsChan)
+					//fmt.Println("=======NEW BLOCK====== ", newBlock.StateTransferTransactions())
+					fmt.Println("=======NEW BLOCK====== txNum: ",len(newBlock.Transactions()), "sttxNum: ", len(newBlock.StateTransferTransactions()))
 
+					// 提案区块错误处理
 					if err == nil {
 						if blk, ok := node.proposedBlock[newBlock.NumberU64()]; ok {
 							utils.Logger().Info().Uint64("blockNum", newBlock.NumberU64()).Str("blockHash", blk.Hash().Hex()).
@@ -124,7 +135,9 @@ func (node *Node) WaitForConsensusReadyV2(readySignal chan consensus.ProposalTyp
 }
 
 // ProposeNewBlock proposes a new block...
+// 提案一个新区块流程
 func (node *Node) ProposeNewBlock(commitSigs chan []byte) (*types.Block, error) {
+	// 先获取当前header，epoch，blockHeight
 	currentHeader := node.Blockchain().CurrentHeader()
 	nowEpoch, blockNow := currentHeader.Epoch(), currentHeader.Number()
 	utils.AnalysisStart("ProposeNewBlock", nowEpoch, blockNow)
@@ -165,6 +178,7 @@ func (node *Node) ProposeNewBlock(commitSigs chan []byte) (*types.Block, error) 
 	}
 
 	// Add VRF
+	// 创建区块的时候，会为当前区块生成一个新的VRF
 	if node.Blockchain().Config().IsVRF(header.Epoch()) {
 		//generate a new VRF for the current block
 		if err := node.Consensus.GenerateVrfAndProof(header); err != nil {
@@ -173,8 +187,10 @@ func (node *Node) ProposeNewBlock(commitSigs chan []byte) (*types.Block, error) 
 	}
 
 	// Prepare normal and staking transactions retrieved from transaction pool
+	// 利用从pool中获取的交易，准备普通交易和staking交易
 	utils.AnalysisStart("proposeNewBlockChooseFromTxnPool")
 
+	// 从交易池里取交易
 	pendingPoolTxs, err := node.TxPool.Pending()
 	if err != nil {
 		utils.Logger().Err(err).Msg("Failed to fetch pending transactions")
@@ -186,6 +202,7 @@ func (node *Node) ProposeNewBlock(commitSigs chan []byte) (*types.Block, error) 
 		plainTxsPerAcc := types.Transactions{}
 		for _, tx := range poolTxs {
 			if plainTx, ok := tx.(*types.Transaction); ok {
+				//fmt.Println("Normal TX size: ",plainTx.Size()) // dynamic sharding
 				plainTxsPerAcc = append(plainTxsPerAcc, plainTx)
 			} else if stakingTx, ok := tx.(*staking.StakingTransaction); ok {
 				// Only process staking transactions after pre-staking epoch happened.
@@ -206,14 +223,59 @@ func (node *Node) ProposeNewBlock(commitSigs chan []byte) (*types.Block, error) 
 
 	// Try commit normal and staking transactions based on the current state
 	// The successfully committed transactions will be put in the proposed block
+	/*
 	if err := node.Worker.CommitTransactions(
 		pendingPlainTxs, pendingStakingTxs, beneficiary,
 	); err != nil {
 		utils.Logger().Error().Err(err).Msg("cannot commit transactions")
 		return nil, err
 	}
+	*/
+	/* dynamic sharding*/
+	// 打包区块时，从freezeCache和committed中获取全部的stateTransfer交易
+	freezeCachePoolTxs, err := node.CommitPool.FreezeCache()
+	if err != nil {
+		utils.Logger().Err(err).Msg("Failed to fetch freezeCache sttx transactions")
+		return nil, err
+	}
+	committedPoolTxs, err := node.CommitPool.Committed()
+	if err != nil {
+		utils.Logger().Err(err).Msg("Failed to fetch committed sttx transactions")
+		return nil, err
+	}
+	pendingStateTransferTxs := atomicState.StateTransferTransactions{}
+	//cumulateSttxNum := 0
+	for _, poolTxs := range freezeCachePoolTxs{
+		//fmt.Println("=======NODE NEWBLOCK freezeCachePoolTxs====", freezeCachePoolTxs)
+		//fmt.Println("Tx size: ", tx.Size())
+		// 限制每个区块处理的sttx总数(最低数量)
+		//if len(freezeCachePoolTxs) < maxProcessSttxNum{
+		//	break
+		//}
+		// for range直接取值的地址是找不到的
+		tx := poolTxs
+		pendingStateTransferTxs = append(pendingStateTransferTxs, &tx)
+	}
+	for _, poolTxs := range committedPoolTxs{
+		//fmt.Println("=======NODE NEWBLOCK committedPoolTxs====", committedPoolTxs)
+		//if len(committedPoolTxs) < maxProcessSttxNum{
+		//	break
+		//}
+		tx := poolTxs
+		pendingStateTransferTxs = append(pendingStateTransferTxs, &tx)
+	}
+
+	// 提交normal, staking, stateTransfer交易based on the current state【完成】
+	if err := node.Worker.CommitTransactions1(
+		pendingPlainTxs, pendingStakingTxs, pendingStateTransferTxs, beneficiary,
+	); err != nil {
+		utils.Logger().Error().Err(err).Msg("cannot commit transactions")
+		return nil, err
+	}
+	// END
 
 	// Prepare cross shard transaction receipts
+	// 获取跨片交易的收据的proof, 最后执行CommitReceipt
 	receiptsList := node.proposeReceiptsProof()
 	if len(receiptsList) != 0 {
 		if err := node.Worker.CommitReceipts(receiptsList); err != nil {
@@ -228,7 +290,7 @@ func (node *Node) ProposeNewBlock(commitSigs chan []byte) (*types.Block, error) 
 		node.Blockchain().Config().IsStaking(node.Worker.GetCurrentHeader().Epoch())
 
 	utils.AnalysisStart("proposeNewBlockVerifyCrossLinks")
-	// Prepare cross links and slashing messages
+	// Prepare cross links and slashing messages (测试是false)
 	var crossLinksToPropose types.CrossLinks
 	if isBeaconchainInCrossLinkEra {
 		allPending, err := node.Blockchain().ReadPendingCrossLinks()
@@ -270,7 +332,7 @@ func (node *Node) ProposeNewBlock(commitSigs chan []byte) (*types.Block, error) 
 	}
 	utils.AnalysisEnd("proposeNewBlockVerifyCrossLinks")
 
-	if isBeaconchainInStakingEra {
+	if isBeaconchainInStakingEra { // 测试不考虑staking
 		// this will set a meaningful w.current.slashes
 		if err := node.Worker.CollectVerifiedSlashes(); err != nil {
 			return nil, err
@@ -288,21 +350,28 @@ func (node *Node) ProposeNewBlock(commitSigs chan []byte) (*types.Block, error) 
 	viewIDFunc := func() uint64 {
 		return node.Consensus.GetCurBlockViewID()
 	}
+	// 这里的FinalizeNewBlock是干嘛的？
+	// FinalizeNewBlock为下一轮共识生成一个新块 (真正构建区块的地方？)
+	// 返回一个block
 	finalizedBlock, err := node.Worker.FinalizeNewBlock(
 		commitSigs, viewIDFunc,
 		coinbase, crossLinksToPropose, shardState,
 	)
 	if err != nil {
+		//fmt.Println("[ProposeNewBlock] Failed finalizing the new block")
 		utils.Logger().Error().Err(err).Msg("[ProposeNewBlock] Failed finalizing the new block")
 		return nil, err
 	}
+	// 验证新区块头(主要是调用/internal/chain/engine.go的VerifyHeader函数)
 	utils.Logger().Info().Msg("[ProposeNewBlock] verifying the new block header")
 	err = node.Blockchain().Validator().ValidateHeader(finalizedBlock, true)
 
 	if err != nil {
+		//fmt.Println("[ProposeNewBlock] Failed verifying the new block header")
 		utils.Logger().Error().Err(err).Msg("[ProposeNewBlock] Failed verifying the new block header")
 		return nil, err
 	}
+	//fmt.Println("=========ProposeNewBlock END============")
 	return finalizedBlock, nil
 }
 

@@ -173,18 +173,22 @@ var (
 	}
 
 	// LocalnetChainConfig contains the chain parameters to run for local development.
+	// 私有网络测试时使用的Epoch设置，不同的Epoch标识链更新的不同功能
+	// Epoch<current epoch时，就可以使用这些功能
+	// 例：CrossTxEpoch<epoch时，切换使用v1 header，harmony可以执行跨片交易
 	LocalnetChainConfig = &ChainConfig{
-		ChainID:                    TestnetChainID,
+		ChainID:                    TestnetChainID, // localnet在使用testnet的chainID
 		EthCompatibleChainID:       EthTestnetShard0ChainID,
 		EthCompatibleShard0ChainID: EthTestnetShard0ChainID,
 		EthCompatibleEpoch:         big.NewInt(0),
-		CrossTxEpoch:               big.NewInt(0),
-		CrossLinkEpoch:             big.NewInt(2),
-		StakingEpoch:               big.NewInt(2),
+		CrossTxEpoch:               big.NewInt(-1),
+		CrossLinkEpoch:             big.NewInt(2), // 测试不加入crosslink数据发送
+		StakingEpoch:               big.NewInt(2), // 测试不加staking交易
 		PreStakingEpoch:            big.NewInt(0),
 		QuickUnlockEpoch:           big.NewInt(0),
 		FiveSecondsEpoch:           big.NewInt(0),
-		TwoSecondsEpoch:            big.NewInt(3),
+		//TwoSecondsEpoch:            big.NewInt(3),
+		TwoSecondsEpoch:            big.NewInt(1), // dynamic sharding 配置共识2s执行完
 		SixtyPercentEpoch:          EpochTBD, // Never enable it for localnet as localnet has no external validator setup
 		RedelegationEpoch:          big.NewInt(0),
 		NoEarlyUnlockEpoch:         big.NewInt(0),
@@ -195,7 +199,7 @@ var (
 		EPoSBound35Epoch:           big.NewInt(0),
 		EIP155Epoch:                big.NewInt(0),
 		S3Epoch:                    big.NewInt(0),
-		IstanbulEpoch:              big.NewInt(0),
+		IstanbulEpoch:              big.NewInt(0), // 这个阶段是？
 		ReceiptLogEpoch:            big.NewInt(0),
 	}
 

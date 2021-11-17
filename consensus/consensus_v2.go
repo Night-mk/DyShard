@@ -131,7 +131,7 @@ func (consensus *Consensus) finalCommit() {
 	beforeCatchupNum := consensus.blockNum
 
 	leaderPriKey, err := consensus.GetConsensusLeaderPrivateKey()
-	if err != nil {
+	if err != nil { // 这个问题没出现
 		consensus.getLogger().Error().Err(err).Msg("[finalCommit] leader not found")
 		return
 	}
@@ -179,6 +179,7 @@ func (consensus *Consensus) finalCommit() {
 	// Or if the leader is changed for next block, the 100% committed sig will be sent to the next leader immediately.
 	if !consensus.IsLeader() || block.IsLastBlockInEpoch() {
 		// send immediately
+		consensus.getLogger().Info().Msg("SendWithRetry: finalCommit")
 		if err := consensus.msgSender.SendWithRetry(
 			block.NumberU64(),
 			msg_pb.MessageType_COMMITTED, []nodeconfig.GroupID{
@@ -228,6 +229,12 @@ func (consensus *Consensus) finalCommit() {
 		Int("numTxns", len(block.Transactions())).
 		Int("numStakingTxns", len(block.StakingTransactions())).
 		Msg("HOORAY!!!!!!! CONSENSUS REACHED!!!!!!!")
+
+	// dynamic sharding
+	// 在这里测试共识完成时间
+	if block.NumberU64() == uint64(1){
+
+	}
 
 	consensus.UpdateLeaderMetrics(float64(numCommits), float64(block.NumberU64()))
 
@@ -400,10 +407,12 @@ func (consensus *Consensus) Start(
 
 				// Update time due for next block
 				consensus.NextBlockDue = time.Now().Add(consensus.BlockPeriod)
+				//fmt.Println("consensus_v2 newBlock Consensus Time: ",consensus.BlockPeriod)
 
 				startTime = time.Now()
 				consensus.msgSender.Reset(newBlock.NumberU64())
-
+				// dynamic sharding
+				//fmt.Println("=====================Consensus===================", newBlock.StateTransferTransactions())
 				consensus.getLogger().Info().
 					Int("numTxs", len(newBlock.Transactions())).
 					Int("numStakingTxs", len(newBlock.StakingTransactions())).
@@ -557,6 +566,7 @@ func (consensus *Consensus) preCommitAndPropose(blk *types.Block) error {
 		}
 
 		// if leader successfully finalizes the block, send committed message to validators
+		consensus.getLogger().Info().Msg("SendWithRetry: preCommitAndPropose")
 		if err := consensus.msgSender.SendWithRetry(
 			blk.NumberU64(),
 			msg_pb.MessageType_COMMITTED, []nodeconfig.GroupID{

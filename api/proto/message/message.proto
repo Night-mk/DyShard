@@ -16,6 +16,7 @@ enum ServiceType {
 }
 
 // MessageType indicates what is the type of this message.
+// deprecated 表示该字段已经被废弃
 enum MessageType {
   NEWNODE_BEACON_STAKING = 0 [deprecated=true];
   ANNOUNCE = 1;

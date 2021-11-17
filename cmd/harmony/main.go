@@ -53,6 +53,7 @@ var (
 	initialAccounts = []*genesis.DeployAccount{}
 )
 
+// Cobra 是一个 Golang 包，它提供了简单的接口来创建命令行程序
 var rootCmd = &cobra.Command{
 	Use:   "harmony",
 	Short: "harmony is the Harmony node binary file",
@@ -141,7 +142,10 @@ func prepareRootCmd(cmd *cobra.Command) error {
 	// build time.
 	os.Setenv("GODEBUG", "netdns=go")
 	// Don't set higher than num of CPU. It will make go scheduler slower.
-	runtime.GOMAXPROCS(runtime.NumCPU())
+	// dynamic sharding
+	// 考虑限制一下程序使用的cpu核心数量
+	//runtime.GOMAXPROCS(runtime.NumCPU())
+	runtime.GOMAXPROCS(2)
 	// Raise fd limits
 	return raiseFdLimits()
 }
@@ -171,7 +175,7 @@ func getHarmonyConfig(cmd *cobra.Command) (harmonyConfig, error) {
 		config, migratedFrom, err = loadHarmonyConfig(configFile)
 	} else {
 		nt := getNetworkType(cmd)
-		config = getDefaultHmyConfigCopy(nt)
+		config = getDefaultHmyConfigCopy(nt) // 基本上用不到default配置
 		isUsingDefault = true
 	}
 	if err != nil {
@@ -195,7 +199,7 @@ func getHarmonyConfig(cmd *cobra.Command) (harmonyConfig, error) {
 			fmt.Println("Update saved config with `./harmony config update [config_file]`")
 		}
 	}
-
+	//fmt.Println("================GO TO MAIN applyRootFlags================")
 	applyRootFlags(cmd, &config)
 
 	if err := validateHarmonyConfig(config); err != nil {
@@ -226,6 +230,11 @@ func applyRootFlags(cmd *cobra.Command, config *harmonyConfig) {
 	applyRevertFlags(cmd, config)
 	applyPrometheusFlags(cmd, config)
 	applySyncFlags(cmd, config)
+
+	// dynamic sharding
+	// 在这将所有cmd输入的config加入到harmonyConfig里
+	applyTwopcFlags(cmd, config)
+
 }
 
 func setupNodeLog(config harmonyConfig) {
@@ -262,8 +271,8 @@ func setupNodeAndRun(hc harmonyConfig) {
 
 	if hc.General.NodeType == "validator" {
 		var err error
-		if hc.General.NoStaking {
-			err = setupLegacyNodeAccount(hc)
+		if hc.General.NoStaking { // 不用staking的方式
+			err = setupLegacyNodeAccount(hc)  // execute here
 		} else {
 			err = setupStakingNodeAccount(hc)
 		}
@@ -272,7 +281,8 @@ func setupNodeAndRun(hc harmonyConfig) {
 			os.Exit(1)
 		}
 	}
-	if hc.General.NodeType == "validator" {
+	if hc.General.NodeType == "validator" { // validator print
+		// validator 打印的shardID来自initialAccounts的参数
 		fmt.Printf("%s mode; node key %s -> shard %d\n",
 			map[bool]string{false: "Legacy", true: "Staking"}[!hc.General.NoStaking],
 			nodeconfig.GetDefaultConfig().ConsensusPriKey.GetPublicKeys().SerializeToHexStr(),
@@ -288,6 +298,7 @@ func setupNodeAndRun(hc harmonyConfig) {
 		}
 	}
 
+	// 创建全局config
 	nodeConfig, err := createGlobalConfig(hc)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR cannot configure node: %s\n", err)
@@ -317,6 +328,7 @@ func setupNodeAndRun(hc harmonyConfig) {
 		utils.Logger().Warn().Err(err).Msg("Check Local Time Accuracy Error")
 	}
 
+	// 设置节点的配置config
 	// Parse RPC config
 	nodeConfig.RPCServer = nodeconfig.RPCServerConfig{
 		HTTPEnabled:        hc.HTTP.Enabled,
@@ -335,6 +347,18 @@ func setupNodeAndRun(hc harmonyConfig) {
 		HTTPEnabled: hc.HTTP.RosettaEnabled,
 		HTTPIp:      hc.HTTP.IP,
 		HTTPPort:    hc.HTTP.RosettaPort,
+	}
+
+	// dynamic sharding
+	// 将harmonyConfig的配置写入node, 用于启动时直接使用
+	nodeConfig.TwoPcServer = nodeconfig.TwoPcConfig{
+		Role: hc.TwoPC.Role,
+		Nodeaddr: hc.TwoPC.Nodeaddr,
+		Coordinator: hc.TwoPC.Coordinator,
+		Followers: hc.TwoPC.Followers,
+		Whitelist: hc.TwoPC.Whitelist,
+		CommitType: hc.TwoPC.CommitType,
+		Timeout: hc.TwoPC.Timeout,
 	}
 
 	if hc.Revert != nil && hc.Revert.RevertBefore != 0 && hc.Revert.RevertTo != 0 {
@@ -418,6 +442,14 @@ func setupNodeAndRun(hc harmonyConfig) {
 			Msg("Start Rosetta failed")
 	}
 
+	// dynamic sharding
+	// 启动2PC
+	if err := currentNode.StartTwoPC(); err != nil {
+		utils.Logger().Warn().
+			Err(err).
+			Msg("Start2PC failed")
+	}
+
 	go listenOSSigAndShutDown(currentNode)
 
 	if !hc.General.IsOffline {
@@ -476,6 +508,7 @@ func nodeconfigSetShardSchedule(config harmonyConfig) {
 	}
 }
 
+// 将本地地址加入initialAccounts变量(初始化的地方)
 func findAccountsByPubKeys(config shardingconfig.Instance, pubKeys multibls.PublicKeys) {
 	for _, key := range pubKeys {
 		keyStr := key.Bytes.Hex()
@@ -487,6 +520,7 @@ func findAccountsByPubKeys(config shardingconfig.Instance, pubKeys multibls.Publ
 }
 
 func setupLegacyNodeAccount(hc harmonyConfig) error {
+	// LocalNet使用localnet的schedule
 	genesisShardingConfig := shard.Schedule.InstanceForEpoch(big.NewInt(core.GenesisEpoch))
 	multiBLSPubKey := setupConsensusKeys(hc, nodeconfig.GetDefaultConfig())
 
@@ -511,6 +545,7 @@ func setupLegacyNodeAccount(hc harmonyConfig) error {
 		)
 		os.Exit(100)
 	}
+
 
 	for _, account := range initialAccounts {
 		fmt.Printf("My Genesis Account: %v\n", *account)
@@ -579,7 +614,7 @@ func createGlobalConfig(hc harmonyConfig) (*nodeconfig.ConfigType, error) {
 		Self:          &selfPeer,
 		BLSKey:        nodeConfig.P2PPriKey,
 		BootNodes:     hc.Network.BootNodes,
-		DataStoreFile: hc.P2P.DHTDataStore,
+		DataStoreFile: hc.P2P.DHTDataStore, // 这项已经没有了
 	})
 	if err != nil {
 		return nil, errors.Wrap(err, "cannot create P2P network host")
@@ -608,7 +643,8 @@ func setupConsensusAndNode(hc harmonyConfig, nodeConfig *nodeconfig.ConfigType) 
 	// Consensus object.
 	// TODO: consensus object shouldn't start here
 	decider := quorum.NewDecider(quorum.SuperMajorityVote, uint32(hc.General.ShardID))
-
+	// 总共2个new
+	// 1. 初始化共识
 	currentConsensus, err := consensus.New(
 		myHost, nodeConfig.ShardID, p2p.Peer{}, nodeConfig.ConsensusPriKey, decider,
 	)
@@ -641,7 +677,7 @@ func setupConsensusAndNode(hc harmonyConfig, nodeConfig *nodeconfig.ConfigType) 
 
 	// Current node.
 	chainDBFactory := &shardchain.LDBFactory{RootDir: nodeConfig.DBDir}
-
+	// 2. 初始化节点
 	currentNode := node.New(myHost, currentConsensus, chainDBFactory, blacklist, nodeConfig.ArchiveModes())
 
 	if hc.Legacy != nil && hc.Legacy.TPBroadcastInvalidTxn != nil {
@@ -655,9 +691,10 @@ func setupConsensusAndNode(hc harmonyConfig, nodeConfig *nodeconfig.ConfigType) 
 	//   2. If specified with --dns=false, use legacy syncing which is syncing through self-
 	//      discover peers.
 	//   3. Else, use the dns for syncing.
+	// dynamic sharding 利用localnet的多主机部署感觉部署在这边改，这里同步节点6000端口和P2P通信毫无关系= =
 	if hc.Network.NetworkType == nodeconfig.Localnet || hc.General.IsOffline {
 		epochConfig := shard.Schedule.InstanceForEpoch(ethCommon.Big0)
-		selfPort := hc.P2P.Port
+		selfPort := hc.P2P.Port // localnet中 hc.HTTP.IP=127.0.0.1
 		currentNode.SyncingPeerProvider = node.NewLocalSyncingPeerProvider(
 			6000, uint16(selfPort), epochConfig.NumShards(), uint32(epochConfig.NumNodesPerShard()))
 	} else if hc.DNSSync.LegacySyncing {
@@ -754,6 +791,7 @@ func setupSyncService(node *node.Node, host p2p.Host, hc harmonyConfig) {
 			InsertHook: node.BeaconSyncHook,
 		}
 	}
+	// 构建同步服务synchronize（downloader->stream）
 	s := synchronize.NewService(host, blockchains, dConfig)
 
 	node.RegisterService(service.Synchronize, s)

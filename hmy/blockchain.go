@@ -25,6 +25,7 @@ import (
 	"github.com/pkg/errors"
 )
 
+// 为hmy 命令行提供接口的函数
 // ChainConfig ...
 func (hmy *Harmony) ChainConfig() *params.ChainConfig {
 	return hmy.BlockChain.Config()

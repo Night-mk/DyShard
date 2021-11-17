@@ -42,19 +42,19 @@ func NewHeader() *Header {
 }
 
 type headerFields struct {
-	ParentHash          common.Hash    `json:"parentHash"       gencodec:"required"`
-	Coinbase            common.Address `json:"miner"            gencodec:"required"`
-	Root                common.Hash    `json:"stateRoot"        gencodec:"required"`
-	TxHash              common.Hash    `json:"transactionsRoot" gencodec:"required"`
-	ReceiptHash         common.Hash    `json:"receiptsRoot"     gencodec:"required"`
-	OutgoingReceiptHash common.Hash    `json:"outgoingReceiptsRoot"     gencodec:"required"`
+	ParentHash          common.Hash    `json:"parentHash"       gencodec:"required"` // 前一个区块的hash
+	Coinbase            common.Address `json:"miner"            gencodec:"required"` // 矿工账户
+	Root                common.Hash    `json:"stateRoot"        gencodec:"required"` // StateDB中的“state Trie”的根节点的RLP哈希值
+	TxHash              common.Hash    `json:"transactionsRoot" gencodec:"required"` // “tx Trie”的根节点的RLP哈希值
+	ReceiptHash         common.Hash    `json:"receiptsRoot"     gencodec:"required"` // "Receipt Trie”的根节点的RLP哈希值
+	OutgoingReceiptHash common.Hash    `json:"outgoingReceiptsRoot"     gencodec:"required"` // 跨分片交易收据根节点RLP哈希值
 	IncomingReceiptHash common.Hash    `json:"incomingReceiptsRoot" gencodec:"required"`
-	Bloom               ethtypes.Bloom `json:"logsBloom"        gencodec:"required"`
-	Number              *big.Int       `json:"number"           gencodec:"required"`
-	GasLimit            uint64         `json:"gasLimit"         gencodec:"required"`
-	GasUsed             uint64         `json:"gasUsed"          gencodec:"required"`
-	Time                *big.Int       `json:"timestamp"        gencodec:"required"`
-	Extra               []byte         `json:"extraData"        gencodec:"required"`
+	Bloom               ethtypes.Bloom `json:"logsBloom"        gencodec:"required"` // Bloom过滤器(Filter)，用来快速判断一个参数Log对象是否存在于一组已知的Log集合中
+	Number              *big.Int       `json:"number"           gencodec:"required"` // 区块号
+	GasLimit            uint64         `json:"gasLimit"         gencodec:"required"` // 区块内所有Gas消耗的理论上限。该数值在区块创建时设置，与父区块的GasUsed有关。
+	GasUsed             uint64         `json:"gasUsed"          gencodec:"required"` // 区块内所有Transaction执行时所实际消耗的Gas总和。
+	Time                *big.Int       `json:"timestamp"        gencodec:"required"` // 时间戳
+	Extra               []byte         `json:"extraData"        gencodec:"required"` // 额外信息
 	MixDigest           common.Hash    `json:"mixHash"          gencodec:"required"`
 	// Additional Fields
 	ViewID              *big.Int    `json:"viewID"           gencodec:"required"`
@@ -65,8 +65,13 @@ type headerFields struct {
 	ShardStateHash      common.Hash `json:"shardStateRoot"`
 	Vrf                 []byte      `json:"vrf"`
 	Vdf                 []byte      `json:"vdf"`
-	ShardState          []byte      `json:"shardState"`
-	CrossLinks          []byte      `json:"crossLink"`
+	ShardState          []byte      `json:"shardState"` // 在shardState中添加range mapping映射关系
+	CrossLinks          []byte      `json:"crossLink"`  // CrossLink 仅用于信标链上存储来自其他分片signature和bitmap对应的hash link(没太懂emmm)
+	/* dynamic sharding */
+	// 添加loadMap根节点的RLP哈希值
+	LoadMapRoot         common.Hash  `json:"loadMapRoot"`
+	// 添加stateTransfer交易集合的RLP哈希值（不需要使用trie存储）
+	StateTransferTxHash common.Hash
 }
 
 // ParentHash is the header hash of the parent block.  For the genesis block
@@ -427,4 +432,23 @@ func (h *Header) GetShardState() (shard.State, error) {
 func (h *Header) Copy() blockif.Header {
 	cpy := *h
 	return &cpy
+}
+
+/**
+	dynamic sharding
+*/
+// LoadMapRoot是loadMap trie的root hash
+func (h *Header) LoadMapRoot() common.Hash {
+	return ethtypes.EmptyRootHash
+}
+// SetLoadMapRoot 设置loadMap trie的root hash
+func (h *Header) SetLoadMapRoot(newRoot common.Hash){
+}
+// TxHash 是stateTransferTransaction交易的RLP的hash.
+func (h *Header) StateTransferTxHash() common.Hash{
+	return ethtypes.EmptyRootHash
+}
+
+// SetTxHash 设置stateTransferTransaction交易的RLP的hash field.
+func (h *Header) SetStateTransferTxHash(newTxHash common.Hash){
 }

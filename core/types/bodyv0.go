@@ -1,6 +1,7 @@
 package types
 
 import (
+	atomicState "github.com/harmony-one/harmony/atomic/types"
 	"io"
 
 	"github.com/ethereum/go-ethereum/rlp"
@@ -18,6 +19,8 @@ type BodyV0 struct {
 type bodyFieldsV0 struct {
 	Transactions []*Transaction
 	Uncles       []*block.Header
+	/* dynamic sharding */
+	StateTransferTransactions []*atomicState.StateTransferTransaction
 }
 
 // Transactions returns the list of transactions.
@@ -119,3 +122,25 @@ func (b *BodyV0) EncodeRLP(w io.Writer) error {
 func (b *BodyV0) DecodeRLP(s *rlp.Stream) error {
 	return s.Decode(&b.f)
 }
+
+/**
+	dynamic sharding
+ */
+// 实现BodyInterface接口
+func (b *BodyV0) StateTransferTransactions() (txs []*atomicState.StateTransferTransaction) {
+	for _, tx := range b.f.StateTransferTransactions {
+		txs = append(txs, tx.Copy())
+	}
+	return txs
+}
+
+// 设置body中的stateTransfer交易列表
+func (b *BodyV0) SetStateTransferTransactions(newStateTransferTransactions []*atomicState.StateTransferTransaction) {
+	var txs []*atomicState.StateTransferTransaction
+	for _, tx := range newStateTransferTransactions {
+		txs = append(txs, tx.Copy())
+	}
+	b.f.StateTransferTransactions = txs
+}
+
+

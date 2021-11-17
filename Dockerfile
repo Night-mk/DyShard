@@ -15,6 +15,8 @@ ENV CGO_LDFLAGS="-L${BLS_DIR}/lib"
 ENV LD_LIBRARY_PATH=${BLS_DIR}/lib:${MCL_DIR}/lib
 ENV GIMME_GO_VERSION="1.16.3"
 ENV PATH="/root/bin:${PATH}"
+## add proxy for go get
+ENV GOPROXY="https://goproxy.cn"
 
 RUN apt-get update -y
 RUN apt install libgmp-dev libssl-dev curl git \
@@ -31,7 +33,8 @@ RUN eval "$(~/bin/gimme ${GIMME_GO_VERSION})"
 
 RUN mkdir /root/workspace
 
-RUN git clone https://github.com/harmony-one/harmony.git ${HMY_PATH}/harmony
+#RUN git clone https://github.com/harmony-one/harmony.git ${HMY_PATH}/harmony
+RUN git clone https://github.com/Night-mk/harmony.git ${HMY_PATH}/harmony
 
 RUN git clone https://github.com/harmony-one/bls.git ${HMY_PATH}/bls
 
@@ -72,10 +75,12 @@ go get -u honnef.co/go/tools/cmd/staticcheck/...
 
 WORKDIR ${HMY_PATH}/harmony
 
-RUN eval "$(~/bin/gimme ${GIMME_GO_VERSION})" ; scripts/install_build_tools.sh
+RUN eval "$(~/bin/gimme ${GIMME_GO_VERSION})" ; go mod tidy; \
+scripts/install_build_tools.sh
 
-RUN eval "$(~/bin/gimme ${GIMME_GO_VERSION})" ; scripts/go_executable_build.sh -S
-
+RUN eval "$(~/bin/gimme ${GIMME_GO_VERSION})" ; go mod tidy; \
+scripts/go_executable_build.sh -S
+# make go-sdk
 RUN cd ${HMY_PATH}/go-sdk && make -j8 && cp hmy /root/bin
 
 ARG K1=one1tq4hy947c9gr8qzv06yxz4aeyhc9vn78al4rmu

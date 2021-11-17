@@ -117,6 +117,7 @@ type DB struct {
 func New(root common.Hash, db Database) (*DB, error) {
 	tr, err := db.OpenTrie(root)
 	if err != nil {
+		fmt.Println("======StateDB Open trie failure=====")
 		return nil, err
 	}
 	return &DB{
@@ -368,10 +369,12 @@ func (db *DB) HasSuicided(addr common.Address) bool {
 /*
  * SETTERS
  */
+// 对所有修改状态的方法添加freeze state的限制
 
 // AddBalance adds amount to the account associated with addr.
 func (db *DB) AddBalance(addr common.Address, amount *big.Int) {
 	stateObject := db.GetOrNewStateObject(addr)
+	if db.getFreezeState(stateObject) {return}
 	if stateObject != nil {
 		stateObject.AddBalance(amount)
 	}
@@ -380,6 +383,7 @@ func (db *DB) AddBalance(addr common.Address, amount *big.Int) {
 // SubBalance subtracts amount from the account associated with addr.
 func (db *DB) SubBalance(addr common.Address, amount *big.Int) {
 	stateObject := db.GetOrNewStateObject(addr)
+	if db.getFreezeState(stateObject) {return}
 	if stateObject != nil {
 		stateObject.SubBalance(amount)
 	}
@@ -388,6 +392,7 @@ func (db *DB) SubBalance(addr common.Address, amount *big.Int) {
 // SetBalance ...
 func (db *DB) SetBalance(addr common.Address, amount *big.Int) {
 	stateObject := db.GetOrNewStateObject(addr)
+	if db.getFreezeState(stateObject) {return}
 	if stateObject != nil {
 		stateObject.SetBalance(amount)
 	}
@@ -396,6 +401,7 @@ func (db *DB) SetBalance(addr common.Address, amount *big.Int) {
 // SetNonce ...
 func (db *DB) SetNonce(addr common.Address, nonce uint64) {
 	stateObject := db.GetOrNewStateObject(addr)
+	if db.getFreezeState(stateObject) {return}
 	if stateObject != nil {
 		stateObject.SetNonce(nonce)
 	}
@@ -404,6 +410,7 @@ func (db *DB) SetNonce(addr common.Address, nonce uint64) {
 // SetCode ...
 func (db *DB) SetCode(addr common.Address, code []byte) {
 	stateObject := db.GetOrNewStateObject(addr)
+	if db.getFreezeState(stateObject) {return}
 	if stateObject != nil {
 		stateObject.SetCode(crypto.Keccak256Hash(code), code)
 	}
@@ -412,10 +419,36 @@ func (db *DB) SetCode(addr common.Address, code []byte) {
 // SetState ...
 func (db *DB) SetState(addr common.Address, key, value common.Hash) {
 	stateObject := db.GetOrNewStateObject(addr)
+	if db.getFreezeState(stateObject) {return}
 	if stateObject != nil {
 		stateObject.SetState(db.db, key, value)
 	}
 }
+
+/**
+	dynamic sharding
+ */
+// 设置freeze state的值
+func (db *DB) SetFreezeState(addr common.Address, isFreeze bool){
+	stateObject := db.GetOrNewStateObject(addr)
+	if stateObject != nil{
+		stateObject.SetFreezeState(db.db, isFreeze)
+	}
+}
+// 返回freeze state的值
+func (db *DB) GetFreezeState(addr common.Address) bool{
+	stateObject := db.GetOrNewStateObject(addr)
+	return db.getFreezeState(stateObject)
+}
+
+// 返回freezeState，内部方法，提供判断是否可以修改状态的标识
+func (db *DB) getFreezeState(obj *Object) bool{
+	if obj != nil{
+		return obj.FreezeState()
+	}
+	return true // 如果是nil则返回true无法修改
+}
+
 
 // Suicide marks the given account as suicided.
 // This clears the account balance.

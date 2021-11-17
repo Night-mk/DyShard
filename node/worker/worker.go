@@ -3,6 +3,8 @@ package worker
 import (
 	"bytes"
 	"fmt"
+	atomicState "github.com/harmony-one/harmony/atomic/types"
+	"github.com/harmony-one/harmony/shard/mapping/load"
 	"math/big"
 	"sort"
 	"time"
@@ -32,6 +34,7 @@ import (
 )
 
 // environment is the worker's current environment and holds all of the current state information.
+// worker对象当前的环境，存储所有当前状态的信息
 type environment struct {
 	signer     types.Signer
 	ethSigner  types.Signer
@@ -44,10 +47,14 @@ type environment struct {
 	outcxs     []*types.CXReceipt       // cross shard transaction receipts (source shard)
 	incxs      []*types.CXReceiptsProof // cross shard receipts and its proof (desitinatin shard)
 	slashes    slash.Records
+	/* dynamic sharding */
+	stateTransferTxs []*atomicState.StateTransferTransaction
+	loadMapState *load.LoadMapDB
 }
 
 // Worker is the main object which takes care of submitting new work to consensus engine
 // and gathering the sealing result.
+// Worker 负责将新工作提交给共识引擎并收集密封结果
 type Worker struct {
 	config   *params.ChainConfig
 	factory  blockfactory.Factory
@@ -58,12 +65,24 @@ type Worker struct {
 	gasCeil  uint64
 }
 
+const(
+	// 测state transfer延迟
+	//maxTxNumLimit = 200
+	//maxTxNumLimit = 600
+	//maxTxNumLimit = 1000
+
+	// 测每个分片的延迟，TPS
+	//maxTxNumLimit = 400
+	//maxTxNumLimit = 1200
+	maxTxNumLimit = 2000
+)
+
 // CommitSortedTransactions commits transactions for new block.
 func (w *Worker) CommitSortedTransactions(
 	txs *types.TransactionsByPriceAndNonce,
 	coinbase common.Address,
 ) {
-	counter := 0
+	counter := 0 // 每个区块只能打包50笔交易？ 可以修改
 	for {
 		// If we don't have enough gas for any further transactions then we're done
 		if w.current.gasPool.Gas() < params.TxGas {
@@ -99,6 +118,10 @@ func (w *Worker) CommitSortedTransactions(
 		// Start executing the transaction
 		w.current.state.Prepare(tx.Hash(), common.Hash{}, len(w.current.txs))
 		_, err := w.commitTransaction(tx, coinbase)
+		/* dynamic sharding */
+		// 调用执行stateTransfer交易
+		// stateTransfer交易假设不产生冲突，所以顺序无所谓，全看Leader排列的方式
+
 
 		sender, _ := common2.AddressToBech32(from)
 		switch err {
@@ -128,14 +151,16 @@ func (w *Worker) CommitSortedTransactions(
 			txs.Shift()
 		}
 		counter++
-		if counter >= 50 {
-			// Limit the number of txn per block as a temporary solution to spams.
+		if counter >= maxTxNumLimit { // dyanmic sharding 修改该参数
+		//if counter >= 50 { // dyanmic sharding 修改该参数
+				// Limit the number of txn per block as a temporary solution to spams.
 			break
 		}
 	}
 }
 
 // CommitTransactions commits transactions for new block.
+// 被node_newblock, main调用
 func (w *Worker) CommitTransactions(
 	pendingNormal map[common.Address]types.Transactions,
 	pendingStaking staking.StakingTransactions, coinbase common.Address,
@@ -150,6 +175,7 @@ func (w *Worker) CommitTransactions(
 	w.CommitSortedTransactions(normalTxns, coinbase)
 
 	// STAKING - only beaconchain process staking transaction
+	// 只有beacon chain处理staking交易
 	if w.chain.ShardID() == shard.BeaconChainShardID {
 		for _, tx := range pendingStaking {
 			// If we don't have enough gas for any further transactions then we're done
@@ -190,6 +216,111 @@ func (w *Worker) CommitTransactions(
 	return nil
 }
 
+/**
+	dynamic sharding
+ */
+// 新增 CommitTransactions1 commits transactions for new block.
+// 增加提交StateTransfer交易的部分
+func (w *Worker) CommitTransactions1(
+	pendingNormal map[common.Address]types.Transactions,
+	pendingStaking staking.StakingTransactions,
+	pendingStateTransfer atomicState.StateTransferTransactions,
+	coinbase common.Address,
+) error {
+	if w.current.gasPool == nil {
+		w.current.gasPool = new(core.GasPool).AddGas(w.current.header.GasLimit())
+	}
+	// dynamic sharding
+	// 测试normal tx执行时间
+	txStartTime := time.Now()
+
+	// HARMONY TXNS
+	normalTxns := types.NewTransactionsByPriceAndNonce(w.current.signer, w.current.ethSigner, pendingNormal)
+
+	w.CommitSortedTransactions(normalTxns, coinbase)
+
+	// STAKING - only beaconchain process staking transaction
+	// 只有beacon chain处理staking交易
+	if w.chain.ShardID() == shard.BeaconChainShardID {
+		for _, tx := range pendingStaking {
+			// If we don't have enough gas for any further transactions then we're done
+			if w.current.gasPool.Gas() < params.TxGas {
+				utils.Logger().Info().Uint64("have", w.current.gasPool.Gas()).Uint64("want", params.TxGas).Msg("Not enough gas for further transactions")
+				break
+			}
+			// Check whether the tx is replay protected. If we're not in the EIP155 hf
+			// phase, start ignoring the sender until we do.
+			if tx.Protected() && !w.config.IsEIP155(w.current.header.Epoch()) {
+				utils.Logger().Info().Str("hash", tx.Hash().Hex()).Str("eip155Epoch", w.config.EIP155Epoch.String()).Msg("Ignoring reply protected transaction")
+				continue
+			}
+
+			// Start executing the transaction
+			w.current.state.Prepare(tx.Hash(), common.Hash{}, len(w.current.txs)+len(w.current.stakingTxs))
+			// THESE CODE ARE DUPLICATED AS ABOVE>>
+			if _, err := w.commitStakingTransaction(tx, coinbase); err != nil {
+				txID := tx.Hash().Hex()
+				utils.Logger().Error().Err(err).
+					Str("stakingTxID", txID).
+					Interface("stakingTx", tx).
+					Msg("Failed committing staking transaction")
+			} else {
+				utils.Logger().Info().Str("stakingTxId", tx.Hash().Hex()).
+					Uint64("txGasLimit", tx.GasLimit()).
+					Msg("Successfully committed staking transaction")
+			}
+		}
+	}
+
+	// 计算TPS
+	txDuration := time.Since(txStartTime)
+	// 计算秒
+	txDurationSec := txDuration.Seconds()
+	utils.Logger().Info().
+		Float64("txExecuteTime", txDurationSec).
+		Int("txNum", len(w.current.txs)).
+		Msg("tx execute time info")
+
+	/* dynamic sharding */
+	// STATETRANSACTION 处理状态迁移交易
+	if pendingStateTransfer.Len() != 0{
+		// 计算sttx交易的执行时间
+		sttxStartTime := time.Now()
+		for _, sttx := range pendingStateTransfer{
+			// 到底要不要做prepare这种工作，对后续有什么影响？(先写着)
+			w.current.state.Prepare(sttx.Hash(), common.Hash{}, len(w.current.txs)+len(w.current.stakingTxs)+len(w.current.stateTransferTxs))
+			if _, err := w.commitStateTransferTransaction(sttx); err != nil{
+				fmt.Println("=======WORKER failed to commit=======")
+				txID := sttx.Hash().Hex()
+				utils.Logger().Error().Err(err).
+					Str("stateTransferTxID", txID).
+					Interface("stateTransferTx", sttx).
+					Msg("Failed committing stateTransfer transaction")
+			}
+		}
+		// 计算TPS
+		sttxDuration := time.Since(sttxStartTime)
+		// 计算秒
+		sttxDurationSec := sttxDuration.Seconds()
+		sttxNum := pendingStateTransfer.Len()
+		utils.Logger().Info().
+			Float64("sttxExecuteTime", sttxDurationSec).
+			Int("sttxNum", sttxNum).
+			Msg("sttx execute time info")
+	}
+	// END
+
+	utils.Logger().Info().
+		Int("newTxns", len(w.current.txs)).
+		Int("newStakingTxns", len(w.current.stakingTxs)).
+		Int("newStateTransferTxns", len(w.current.stateTransferTxs)).
+		Uint64("blockGasLimit", w.current.header.GasLimit()).
+		Uint64("blockGasUsed", w.current.header.GasUsed()).
+		Msg("Block gas limit and usage info")
+	return nil
+}
+// END
+
 func (w *Worker) commitStakingTransaction(
 	tx *staking.StakingTransaction, coinbase common.Address,
 ) ([]*types.Log, error) {
@@ -225,6 +356,7 @@ func (w *Worker) commitTransaction(
 ) ([]*types.Log, error) {
 	snap := w.current.state.Snapshot()
 	gasUsed := w.current.header.GasUsed()
+	// 执行交易获取收据
 	receipt, cx, _, err := core.ApplyTransaction(
 		w.config,
 		w.chain,
@@ -258,6 +390,43 @@ func (w *Worker) commitTransaction(
 	return receipt.Logs, nil
 }
 
+/**
+	dynamic sharding
+ */
+// commitStateTransferTransaction， 执行stateTransfer交易并更新worker.current的状态
+func (w *Worker) commitStateTransferTransaction(
+	sttx *atomicState.StateTransferTransaction,
+) ([]*types.Log, error) {
+	snap := w.current.state.Snapshot()
+	snapLoadMap := w.current.loadMapState.Snapshot()
+	// 执行stateTransfer交易获取收据
+	// 这里执行之后状态已经改变了，但是怎么删除相关交易呢？
+	receipt, err := core.ApplyStateTransferTransaction(
+		w.config, w.current.state, w.current.header, w.current.loadMapState, sttx,
+	)
+	if err != nil { // 两个state执行回退
+		//fmt.Println("=========Commit Error when ApplyStateTransferTransaction=======")
+		w.current.state.RevertToSnapshot(snap)
+		w.current.loadMapState.RevertToSnapshot(snapLoadMap)
+		utils.Logger().Error().
+			Err(err).Interface("sttxn", sttx).
+			Msg("StateTransferTransaction failed commitment")
+		return nil, errNilReceipt
+	}
+	if receipt == nil {
+		//fmt.Println("=========Commit Error receipt nil=======")
+		utils.Logger().Warn().Interface("sttx", sttx).Msg("Receipt is Nil!")
+		return nil, errNilReceipt
+	}
+	// 更新当前environment的stateTransferTxs
+	w.current.stateTransferTxs = append(w.current.stateTransferTxs, sttx)
+	w.current.receipts = append(w.current.receipts, receipt)
+
+	return receipt.Logs, nil
+}
+// END
+
+
 // CommitReceipts commits a list of already verified incoming cross shard receipts
 func (w *Worker) CommitReceipts(receiptsList []*types.CXReceiptsProof) error {
 	if w.current.gasPool == nil {
@@ -284,6 +453,7 @@ func (w *Worker) CommitReceipts(receiptsList []*types.CXReceiptsProof) error {
 }
 
 // UpdateCurrent updates the current environment with the current state and header.
+// 新创建区块的时候，首先要对worker更新一下当前最新的数据
 func (w *Worker) UpdateCurrent() error {
 	parent := w.chain.CurrentBlock()
 	num := parent.Number()
@@ -308,6 +478,9 @@ func (w *Worker) GetCurrentHeader() *block.Header {
 // makeCurrent creates a new environment for the current cycle.
 func (w *Worker) makeCurrent(parent *types.Block, header *block.Header) error {
 	state, err := w.chain.StateAt(parent.Root())
+	// dynamic sharding
+	// 增加worker中对loadMap的初始化
+	loadMapState, err := w.chain.LoadMapStateAt(parent.LoadMapRoot())
 	if err != nil {
 		return err
 	}
@@ -316,6 +489,7 @@ func (w *Worker) makeCurrent(parent *types.Block, header *block.Header) error {
 		ethSigner: types.NewEIP155Signer(w.config.EthCompatibleChainID),
 		state:     state,
 		header:    header,
+		loadMapState: loadMapState, // 增加赋值
 	}
 
 	w.current = env
@@ -445,6 +619,9 @@ func (w *Worker) verifySlashes(
 }
 
 // FinalizeNewBlock generate a new block for the next consensus round.
+// 创建新区块的核心函数，除了输入以外，状态都从worker.current(environment)获取
+// 最终调用engine.Finalize1函数将状态写入区块
+// dynamic sharding
 func (w *Worker) FinalizeNewBlock(
 	commitSigs chan []byte, viewID func() uint64, coinbase common.Address,
 	crossLinks types.CrossLinks, shardState *shard.State,
@@ -485,6 +662,7 @@ func (w *Worker) FinalizeNewBlock(
 	}
 
 	// Put shard state into header
+	// 设置shardState存到header中
 	if shardState != nil && len(shardState.Shards) != 0 {
 		//we store shardstatehash in header only before prestaking epoch (header v0,v1,v2)
 		if !w.config.IsPreStaking(w.current.header.Epoch()) {
@@ -495,6 +673,7 @@ func (w *Worker) FinalizeNewBlock(
 			isStaking = true
 		}
 		// NOTE: Besides genesis, this is the only place where the shard state is encoded.
+		// 唯一编码shardState的地方？
 		shardStateData, err := shard.EncodeWrapper(*shardState, isStaking)
 		if err == nil {
 			w.current.header.SetShardState(shardStateData)
@@ -505,11 +684,15 @@ func (w *Worker) FinalizeNewBlock(
 	}
 	state := w.current.state.Copy()
 	copyHeader := types.CopyHeader(w.current.header)
+	/* dynamic sharding */
+	// 复制当前的loadMap状态
+	loadMapState := w.current.loadMapState.Copy()
 
+	// 异步等待签名完成的信号
 	sigsReady := make(chan bool)
 	go func() {
 		select {
-		case sigs := <-commitSigs:
+		case sigs := <-commitSigs: // 已经等到commit签名了
 			sig, signers, err := bls.SeparateSigAndMask(sigs)
 			if err != nil {
 				utils.Logger().Error().Err(err).Msg("Failed to parse commit sigs")
@@ -530,12 +713,25 @@ func (w *Worker) FinalizeNewBlock(
 		}
 	}()
 
-	block, _, err := w.engine.Finalize(
-		w.chain, copyHeader, state, w.current.txs, w.current.receipts,
-		w.current.outcxs, w.current.incxs, w.current.stakingTxs,
+	//block, _, err := w.engine.Finalize(
+	//	w.chain, copyHeader, state, w.current.txs, w.current.receipts,
+	//	w.current.outcxs, w.current.incxs, w.current.stakingTxs,
+	//	w.current.slashes, sigsReady, viewID,
+	//)
+	/* dynamic sharding */
+	// 使用Finalize1函数，增加loadMapState和stateTransferTxs作为输入
+	block, _, err := w.engine.Finalize1(
+		w.chain, copyHeader, state, loadMapState,  w.current.txs, w.current.receipts,
+		w.current.outcxs, w.current.incxs, w.current.stakingTxs, w.current.stateTransferTxs,
 		w.current.slashes, sigsReady, viewID,
 	)
+	// sttx这里还有
+	//fmt.Println("=======ProposeNewBlock FinalizeNewBlock current sttx=======", w.current.stateTransferTxs)
+	//if block == nil{
+	//	fmt.Println("worker FinalizeNewBlock Finalize1 return nil")
+	//}
 	if err != nil {
+		fmt.Println("=======FinalizeNewBlock ERROR=======")
 		return nil, errors.Wrapf(err, "cannot finalize block")
 	}
 	return block, nil

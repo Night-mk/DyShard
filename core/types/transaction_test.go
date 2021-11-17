@@ -98,7 +98,7 @@ func TestTransactionJSON(t *testing.T) {
 	for i := uint64(0); i < 25; i++ {
 		var tx *Transaction
 		switch i % 2 {
-		case 0:
+		case 0: // 创建新tx，地址和shard不用对应？
 			tx = NewTransaction(i, common.Address{1}, 0, common.Big0, 1, common.Big2, []byte("abcdef"))
 		case 1:
 			tx = NewContractCreation(i, 0, common.Big0, 1, common.Big2, []byte("abcdef"))

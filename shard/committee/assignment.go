@@ -269,6 +269,7 @@ var (
 )
 
 // This is the shard state computation logic before staking epoch.
+// staking之前计算shard state的逻辑
 func preStakingEnabledCommittee(s shardingconfig.Instance) (*shard.State, error) {
 	shardNum := int(s.NumShards())
 	shardHarmonyNodes := s.NumHarmonyOperatedNodesPerShard()
@@ -401,10 +402,12 @@ func (def partialStakingEnabled) Compute(
 			preStaking = false
 		}
 	}
-
+	// localnet就返回V1
 	instance := shard.Schedule.InstanceForEpoch(epoch)
 	if preStaking {
 		// Pre-staking shard state doesn't need to set epoch (backward compatible)
+		// dynamic sharding
+		//fmt.Println("assignment.go Compute->preStaking")
 		return preStakingEnabledCommittee(instance)
 	}
 	// Sanity check, can't compute against epochs in past

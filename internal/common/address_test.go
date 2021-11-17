@@ -150,6 +150,15 @@ func TestAddressToBech32(t *testing.T) {
 	}
 }
 
+// 测试address -> bech32
+func TestAddressToBech32M(t *testing.T) {
+	//adr := ethCommon.HexToAddress("0x056321ab0c63934e26f0376d2d4114dbeb0a394e")
+	adr := ethCommon.HexToAddress("15a45444f1d49b5f07ba66c28c3515a6fa5f75b0")
+	if address, err := AddressToBech32(adr); err == nil {
+		t.Log("bech32 address: ", address)
+	}
+}
+
 func TestParseAddr(t *testing.T) {
 	adr := ethCommon.HexToAddress("0x15a128e599b74842bccba860311efa92991bffb5")
 	adr2, _ := ParseAddr("one1zksj3evekayy90xt4psrz8h6j2v3hla4qwz4ur")

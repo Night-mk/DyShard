@@ -184,3 +184,17 @@ func (s HeaderFieldSetter) CrossLinks(newCrossLinks []byte) HeaderFieldSetter {
 func (s HeaderFieldSetter) Header() *Header {
 	return s.h
 }
+
+/*
+	dynamic sharding
+ */
+// 设置StateTransferTxHash，并返回header
+func (s HeaderFieldSetter) StateTransferTxHash(newStateTransferTxHash common.Hash) HeaderFieldSetter {
+	s.h.SetStateTransferTxHash(newStateTransferTxHash)
+	return s
+}
+
+func (s HeaderFieldSetter) LoadMapRoot(newRoot common.Hash) HeaderFieldSetter {
+	s.h.SetLoadMapRoot(newRoot)
+	return s
+}

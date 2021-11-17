@@ -3,6 +3,7 @@ package types
 import (
 	"github.com/harmony-one/harmony/block"
 	"github.com/harmony-one/harmony/staking/types"
+	atomicState "github.com/harmony-one/harmony/atomic/types"
 )
 
 // BodyFieldSetter is a body field setter.
@@ -37,4 +38,13 @@ func (bfs BodyFieldSetter) IncomingReceipts(newIncomingReceipts CXReceiptsProofs
 // Body ends the field setter chain and returns the underlying body itself.
 func (bfs BodyFieldSetter) Body() *Body {
 	return bfs.b
+}
+
+/**
+	dynamic sharding
+ */
+// 设置body的stateTransfer field
+func (bfs BodyFieldSetter) StateTransferTransactions(newStateTransferTransactions []*atomicState.StateTransferTransaction) BodyFieldSetter {
+	bfs.b.SetStateTransferTransactions(newStateTransferTransactions)
+	return bfs
 }

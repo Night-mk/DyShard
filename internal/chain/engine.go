@@ -2,6 +2,9 @@ package chain
 
 import (
 	"bytes"
+	"fmt"
+	atomicState "github.com/harmony-one/harmony/atomic/types"
+	"github.com/harmony-one/harmony/shard/mapping/load"
 	"math/big"
 	"sort"
 
@@ -68,16 +71,21 @@ func (e *engineImpl) SetBeaconchain(beaconchain engine.ChainReader) {
 
 // VerifyHeader checks whether a header conforms to the consensus rules of the bft engine.
 // Note that each block header contains the bls signature of the parent block
+// 检查header是否符合 bft 引擎的共识规则？
 func (e *engineImpl) VerifyHeader(chain engine.ChainReader, header *block.Header, seal bool) error {
+	// 利用chain获取父区块的Header(从数据库)
 	parentHeader := chain.GetHeader(header.ParentHash(), header.Number().Uint64()-1)
-	if parentHeader == nil {
+	if parentHeader == nil { // 如果没有该Header，则返回错误
+		//fmt.Println("======engine VerifyHeader no parent header======")
 		return engine.ErrUnknownAncestor
 	}
-	if seal {
+	if seal { // 检查给定区块的父区块是否满足PoS难度要求
 		if err := e.VerifySeal(chain, header); err != nil {
+			//fmt.Println("======engine VerifyHeader do not satisfied PoS======")
 			return err
 		}
 	}
+	//fmt.Println("======VerifyHeader return nil!======")
 	return nil
 }
 
@@ -243,6 +251,7 @@ func GetLeaderPubKeyFromCoinbase(
 // VerifySeal implements Engine, checking whether the given block's parent block satisfies
 // the PoS difficulty requirements, i.e. >= 2f+1 valid signatures from the committee
 // Note that each block header contains the bls signature of the parent block
+// 检查给定区块的父区块是否满足PoS难度要求
 func (e *engineImpl) VerifySeal(chain engine.ChainReader, header *block.Header) error {
 	if chain.CurrentHeader().Number().Uint64() <= uint64(1) {
 		return nil
@@ -339,6 +348,96 @@ func (e *engineImpl) Finalize(
 	header.SetRoot(state.IntermediateRoot(chain.Config().IsS3(header.Epoch())))
 	return types.NewBlock(header, txs, receipts, outcxs, incxs, stks), payout, nil
 }
+
+/**
+	dynamic sharding
+ */
+// Finalize1函数设置最终状态，并构建区块（利用types.NewBlock1）
+// sigsReady 信号指示是否在header对象中填充了提交信号。
+func (e *engineImpl) Finalize1(
+	chain engine.ChainReader, header *block.Header,
+	state *state.DB, loadmapdb *load.LoadMapDB, txs []*types.Transaction,
+	receipts []*types.Receipt, outcxs []*types.CXReceipt,
+	incxs []*types.CXReceiptsProof, stks staking.StakingTransactions, sttxs atomicState.StateTransferTransactions,
+	doubleSigners slash.Records, sigsReady chan bool, viewID func() uint64,
+) (*types.Block, reward.Reader, error) {
+	// 判断是否是beaconchain或者已经使用了staking（不想启动staking）
+	isBeaconChain := header.ShardID() == shard.BeaconChainShardID
+	inStakingEra := chain.Config().IsStaking(header.Epoch())
+
+	// Process Undelegations, set LastEpochInCommittee and set EPoS status
+	// Needs to be before AccumulateRewardsAndCountSigs
+	// 处理staking相关的取消委托事件（不重要）
+	// IsCommitteeSelectionBlock 检查给定的header是否用于委员会选择块
+	if IsCommitteeSelectionBlock(chain, header) {
+		//fmt.Println("====IsCommitteeSelectionBlock error ====")
+		// 将解锁的代币提取到委托人的账户
+		if err := payoutUndelegations(chain, header, state); err != nil {
+			return nil, nil, err
+		}
+
+		// Needs to be after payoutUndelegations because payoutUndelegations
+		// depends on the old LastEpochInCommittee
+		if err := setElectionEpochAndMinFee(header, state, chain.Config()); err != nil {
+			return nil, nil, err
+		}
+
+		curShardState, err := chain.ReadShardState(chain.CurrentBlock().Epoch())
+		if err != nil {
+			return nil, nil, err
+		}
+		// Needs to be before AccumulateRewardsAndCountSigs because
+		// ComputeAndMutateEPOSStatus depends on the signing counts that's
+		// consistent with the counts when the new shardState was proposed.
+		// Refer to committee.IsEligibleForEPoSAuction()
+		for _, addr := range curShardState.StakedValidators().Addrs {
+			if err := availability.ComputeAndMutateEPOSStatus(
+				chain, state, addr,
+			); err != nil {
+				return nil, nil, err
+			}
+		}
+	}
+
+	// Accumulate block rewards and commit the final state root
+	// Header seems complete, assemble into a block and return
+	// 累计区块奖励并且提交最终状态root,在这里提交最终state root？，之后将header组合到block中返回
+	// AccumulateRewardsAndCountSigs函数（重要）,只在这个文件中调用片
+	// 主要用于处理多种角色的权益分配
+	payout, err := AccumulateRewardsAndCountSigs(
+		chain, state, header, e.Beaconchain(), sigsReady,
+	)
+	if err != nil {
+		fmt.Println("====AccumulateRewardsAndCountSigs error====")
+		return nil, nil, err
+	}
+
+	// Apply slashes
+	if isBeaconChain && inStakingEra && len(doubleSigners) > 0 {
+		if err := applySlashes(chain, header, state, doubleSigners); err != nil {
+			//fmt.Println("====isBeaconChain && inStakingEra error====")
+			return nil, nil, err
+		}
+	} else if len(doubleSigners) > 0 {
+		//fmt.Println("====len(doubleSigners) > 0 error====")
+		return nil, nil, errors.New("slashes proposed in non-beacon chain or non-staking epoch")
+	}
+
+	// ViewID setting needs to happen after commig sig reward logic for pipelining reason.
+	// TODO: make the viewID fetch from caller of the block proposal.
+	header.SetViewID(new(big.Int).SetUint64(viewID()))
+
+	// Finalize the state root
+	header.SetRoot(state.IntermediateRoot(chain.Config().IsS3(header.Epoch())))
+	/* dynamic sharding */
+	// 设置loadMap的root
+	header.SetLoadMapRoot(loadmapdb.IntermediateRoot(chain.Config().IsS3(header.Epoch())))
+	//fmt.Println("===engine Finalize1 sttx===", sttxs)
+	return types.NewBlock1(header, txs, receipts, outcxs, incxs, stks, sttxs), payout, nil
+	// END
+
+}
+// END
 
 // Withdraw unlocked tokens to the delegators' accounts
 func payoutUndelegations(
